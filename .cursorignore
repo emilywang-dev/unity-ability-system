@@ -1,0 +1,22 @@
+# Unity caches
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+
+# Logs
+Logs/
+
+# User settings
+UserSettings/
+
+# Visual Studio / Rider
+.vs/
+.vscode/
+*.csproj
+*.sln
+
+# OS junk
+.DS_Store
+Thumbs.db

@@ -1,0 +1,68 @@
+---
+description: Code style, naming, and folder/assembly conventions for unity-ability-system. Aimed at avoiding AI-generated bloat and structural drift.
+globs: Assets/**/*
+---
+
+# Code Style and Structure Rules
+
+## Class Responsibility
+
+Each class should map to one of the architecture's named responsibilities (see `architecture.mdc` and `ARCHITECTURE_Detailed.md`). Do not let a class accumulate responsibilities outside its stated role — e.g. `BuffSystem` owns Apply decisions and Tick lifecycle, not damage calculation or input handling. If a method you're adding doesn't fit the class's responsibility, it belongs somewhere else.
+
+`AbilityBase` is the only abstract base class in this project. Do not introduce new abstract base classes — if behavior needs sharing, use an interface plus a private helper method.
+
+## Naming Conventions
+
+| Category | Convention | Example |
+|---|---|---|
+| Interfaces | `I` prefix, PascalCase | `IAbility`, `IBuffEffect`, `IBuffApplier`, `IDamageModifier`, `IRandomProvider`, `IAbilityTargetProvider`, `ICooldownQuery` |
+| Abstract classes | `Base` suffix | `AbilityBase` |
+| ScriptableObject configs | `Config` suffix | `AbilityConfig`, `BuffConfig`, `PlayerConfig`, `EnemyConfig` |
+| MonoBehaviour adapters | No suffix | `Player`, `Enemy`, `GameManager` |
+| Event structs | `Event` suffix | `DamageEvent`, `BuffAppliedEvent`, `EntityDiedEvent` |
+| Context types | `Context` suffix, both `readonly struct` (see `type-design.mdc`) | `DamageContext`, `AbilityContext` |
+| Dependency bundles | `Deps` suffix, `readonly struct` | `AbilityTargetDeps` |
+| Slot types | `Slot` suffix | `AbilitySlot` |
+| Enums | PascalCase, no suffix | `StatType`, `DamageType`, `ModifierType`, `AbilityExecuteResult`, `TryExecuteResult` |
+| Private fields | `_camelCase` with underscore prefix | `_currentHP`, `_handlers` |
+| Public properties | PascalCase | `CurrentHP`, `MaxHP` |
+
+## Folder Structure
+
+```
+Assets/
+├── Scripts/
+│   ├── Core/                ← IEventBus, EventBus, IRandomProvider, StateMachine, IState
+│   │   └── Events/          ← HealEvent, HpChangedEvent, CooldownStartedEvent, CooldownEndedEvent
+│   ├── Character/           ← CharacterStats, Damageable, ICombatEntity
+│   ├── Combat/
+│   │   └── Events/          ← DamageEvent, EntityDiedEvent (Victim field)
+│   ├── Ability/             ← AbilitySystem, AbilityTargetDeps, AbilitySlot, ICooldownQuery, IAbilityTargetProvider, DamageAbility, HealAbility, CooldownManager
+│   ├── Buff/                ← IBuffApplier, BuffSystem, IBuffEffect, BuffConfig
+│   │   └── Events/          ← BuffAppliedEvent, BuffRemovedEvent
+│   └── Demo/                ← DashAbility, UnityRandomProvider, Player, Enemy, GameManager, PlayerInputHandler, EnemyAI, PlayerConfig, EnemyConfig, states, HUD
+├── Tests/
+├── Materials/
+└── Scenes/
+    └── Demo.unity
+```
+
+Do not place types in the wrong layer folder (e.g. a Combat type under Core/). Do not create speculative empty subfolders.
+
+**Config ScriptableObject placement:** `AbilityConfig` and `BuffConfig` live in Ability/ and Buff/ respectively. `PlayerConfig` and `EnemyConfig` live in **Demo/** — they hold **`StatBaseEntry[]`** (for `CharacterStats` bases) + **`List<AbilitySlot>`** and may serialize Demo-layer `[SerializeReference] IAbility` implementations (e.g. `DashAbility`).
+
+## Assembly Definitions
+
+Each folder under `Scripts/` has its own `.asmdef` file. Names follow the pattern `Game.<LayerName>`:
+
+| Folder | Assembly name | References |
+|---|---|---|
+| Core/ | `Game.Core` | (none) |
+| Character/ | `Game.Character` | Core |
+| Combat/ | `Game.Combat` | Core, Character |
+| Ability/ | `Game.Ability` | Core, Combat, Character, Buff |
+| Buff/ | `Game.Buff` | Core, Character |
+| Demo/ | `Game.Demo` | all layers |
+| Tests/ | `Game.Tests` | all gameplay layers (not Demo) |
+
+Do not place code from one assembly into another assembly's folder. Do not create new `.asmdef` files without a concrete dependency-isolation reason (a future `Game.Editor` for editor-only tooling would qualify). Update this table if you do.

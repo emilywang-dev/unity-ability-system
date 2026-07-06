@@ -1,0 +1,102 @@
+---
+description: Error handling and validation rules for unity-ability-system, especially around constructor-injected dependencies.
+globs: Assets/Scripts/**/*.cs
+---
+
+# Error Handling Rules
+
+This project relies on constructor injection throughout (see `architecture.mdc`). A constructor that accepts a required dependency but doesn't validate it silently defeats the purpose of injection — failures move to wherever the null reference is first used, far from the actual mistake.
+
+## Constructor Validation
+
+Validate required constructor arguments and throw immediately if they are invalid. Do not accept a null required dependency and silently continue.
+
+```csharp
+// Wrong — null dependency surfaces as a confusing NullReferenceException later
+public Damageable(CharacterStats stats, IEventBus eventBus)
+{
+    _stats = stats;
+    _eventBus = eventBus; // could be null, failure deferred
+}
+
+// Correct — fail at the point of construction, with a clear message
+public Damageable(CharacterStats stats, IEventBus eventBus)
+{
+    _stats = stats ?? throw new ArgumentNullException(nameof(stats));
+    _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
+}
+```
+
+## Fail Fast
+
+Prefer failing immediately and loudly during initialization over continuing in a known-bad state. Do not write code that silently no-ops on invalid input when the caller should be told something is wrong.
+
+```csharp
+// Wrong — hides a real bug (caller passed a null config)
+public void Apply(BuffConfig config)
+{
+    if (config == null) return;
+    // ...
+}
+
+// Correct — surfaces the bug immediately
+public void Apply(BuffConfig config, ICombatEntity instigator = null)
+{
+    if (config == null) throw new ArgumentNullException(nameof(config));
+    // instigator may be null for self-applied buffs
+}
+```
+
+This applies to required dependencies and arguments the caller controls. It does not apply to expected runtime conditions that are part of normal gameplay flow — e.g. `IAbility.CanExecute` returning `false` because `ctx.CooldownQuery.IsOnCooldown(ctx.AbilityIndex)` is true is not an error; `AbilitySystem.TryExecute` returns `TryExecuteResult.OnCooldown` without calling `Execute`.
+
+## Numeric Argument Validation
+
+Validate numeric gameplay inputs at the API boundary where invalid values indicate a caller bug:
+
+```csharp
+// Damageable.TakeDamage — reject negative damage amounts
+public void TakeDamage(float amount)
+{
+    if (amount < 0f)
+        throw new ArgumentOutOfRangeException(nameof(amount), amount, "Damage amount must be non-negative.");
+    // subtract, clamp CurrentHP >= 0, publish HpChangedEvent
+}
+```
+
+`Heal` should reject negative amounts similarly (`ArgumentOutOfRangeException`). Zero damage/heal is valid and should no-op or apply without throwing.
+
+`AbilitySystem.TryExecute` must throw `ArgumentOutOfRangeException` when `abilityIndex` is out of range — do not return a reserved `TryExecuteResult` value for caller bugs.
+
+`CharacterStats` constructor must reject null or empty `baseValues` (`ArgumentNullException` / `ArgumentException`).
+
+## Assertions vs Exceptions
+
+`Debug.Assert` is for editor-time invariant checks only — Unity strips `Debug.Assert` calls from non-development builds, so it must never be the only thing guarding a condition that needs to hold at runtime in a shipped build. Use exceptions (`ArgumentNullException`, `ArgumentOutOfRangeException`, `InvalidOperationException`) for any condition that must be enforced regardless of build configuration. `Debug.Assert` may be used in addition to an exception, for example to catch a bug earlier during editor testing, but never as a substitute for it.
+
+A useful split: use `Debug.Assert` for impossible internal states (an invariant your own code should guarantee, e.g. "this list should never be empty here"); use exceptions for invalid public API usage (a caller passed something they shouldn't have, e.g. a null required argument).
+
+## Do Not Swallow Exceptions
+
+Do not write empty or near-empty `catch` blocks. If you catch an exception, either handle it meaningfully (log it with context, retry, or convert it to a different exception type) or don't catch it at all and let it propagate.
+
+```csharp
+// Wrong — swallows the failure, makes debugging the original cause impossible
+try
+{
+    ApplyBuff(target, config);
+}
+catch
+{
+}
+
+// Correct — propagate, or handle with actual context
+try
+{
+    ApplyBuff(target, config);
+}
+catch (Exception ex)
+{
+    Debug.LogError($"Failed to apply buff {config.name} to {target}: {ex}");
+    throw;
+}
+```

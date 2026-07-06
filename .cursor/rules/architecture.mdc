@@ -1,0 +1,308 @@
+---
+description: Core architectural constraints for unity-ability-system. Apply to all files under Scripts/.
+globs: Assets/Scripts/**/*.cs
+---
+
+# Architecture Rules
+
+## Layer Boundaries
+
+The codebase is divided into layers with strict one-way dependencies:
+
+See the `.asmdef` files for the authoritative dependency graph.
+
+- `Core` has no dependencies on other game layers.
+- `Character` depends only on `Core`.
+- `Combat` depends on `Core` and `Character`.
+- `Ability` depends on `Core`, `Combat`, `Character`, and `Buff`. **Buff must not depend on `Ability`.**
+- `Buff` depends on `Core` and `Character`.
+- **`Combat` and `Buff` are siblings — neither may reference the other.** DoT (Burn) bypasses `DamagePipeline` by design; do not add `Game.Buff` → `Game.Combat` or the reverse without an explicit architecture change.
+- `Demo` depends on all layers.
+
+Do not introduce dependencies that go against this direction. If you are unsure which layer a type belongs to, check the asmdef files.
+
+## Portfolio Scope — Do Not Implement
+
+This is a **portfolio-scale single-player demo** (~3k–5k LOC, fixed ability slots, 1v1). Do not add production GAS-scale systems unless the user explicitly requests them. Document trade-offs in README instead of half-implementing.
+
+**Do not generate:**
+
+| System | Reason |
+|---|---|
+| `GameplayTag` / tag containers / BlockedByTags / CancelsTags | CC, silence, immunity, and ability mutual exclusion need many abilities and rules; demo uses `CanExecute` + cooldown only |
+| `TargetFilter` / `TargetPolicy` / AOE / cone / ground targeting | Demo is single-target 1v1; `TryExecute` takes one `AbilityTargetDeps` |
+| `GameplayEffectSpec` / attribute snapshotting at cast time | No travel-time projectiles or PvP ordering; modifiers read live `Stats` at hit time |
+| Resource / cost gating (mana, energy, charges) | Demo abilities have cooldown only; `CanExecute` does not check resources |
+| `ICooldownManager` or DI frameworks (VContainer, Zenject) | Use concrete `CooldownManager` + constructor injection |
+| BuffSystem split into Manager + Container | Merged `BuffSystem` is intentional |
+| Network prediction / replication / save-load | Explicit non-goals |
+| Cast time / channel / GCD / `PlayerCastState` | All demo abilities are instant |
+| Activation Commit phase (TryActivate→Commit cost→Execute) | Demo: Execute success → cooldown only; no cost rollback |
+| Modifier priority phases (Base → Equipment → Buff → Final) | Demo pipeline allows **multiplicative modifiers only**; flat/armor pen needs phased pipeline |
+| AbilityId registry replacing fixed `AbilityIndex` | Three fixed slots; `AbilityIndex` on cooldown events is sufficient |
+| SO Event Channels as global event backbone | Use injected `IEventBus` instances |
+| Merging `AbilityExecuteResult` and `TryExecuteResult` | Two enums by design — `OnCooldown` exists only on `TryExecuteResult` |
+
+If asked to "make it more like GAS," extend README **GAS Comparison / What I'd Do Differently** — do not silently expand runtime scope.
+
+## Event Placement
+
+Events are `readonly struct` types placed in the **lowest layer that has an `Events/` folder** and can reference all payload types without violating asmdef direction. When payload types alone point to an earlier layer but the event's semantic domain belongs elsewhere, place it in the semantic layer's `Events/` folder (e.g. `EntityDiedEvent` payload is only `ICombatEntity`, but death is a combat lifecycle event → `Combat/Events/`).
+
+| Location | Events |
+|---|---|
+| `Core/Events/` | `HealEvent`, `HpChangedEvent`, `CooldownStartedEvent`, `CooldownEndedEvent` (primitive payloads only) |
+| `Combat/Events/` | `DamageEvent`, `EntityDiedEvent` |
+| `Buff/Events/` | `BuffAppliedEvent`, `BuffRemovedEvent` |
+
+Do not define gameplay events elsewhere. Do not put upper-layer types in `Core/Events/`.
+
+## Pure C# vs MonoBehaviour
+
+Game logic must live in pure C# classes with no Unity lifecycle dependency.
+
+MonoBehaviour is allowed only for Unity-facing adapters: view, input handling, lifecycle entry points, VFX/animation drivers, and the composition root. Current examples in this project: `Player`, `Enemy`, `GameManager`, HUD/UI binding components. This list is not exhaustive — new Unity-facing adapters (e.g. `ProjectileView`, `CameraController`, `VFXController`) are permitted under the same rule as long as they contain no gameplay logic and only forward calls to pure C# classes.
+
+A MonoBehaviour may contain lifecycle orchestration and forwarding logic (e.g. deciding when to call `Jump()` based on input), but gameplay decisions — damage calculation, buff logic, AI behavior, state transition conditions, stat math — belong in pure C# classes.
+
+## Entity MonoBehaviour Policy
+
+**Player and Enemy each mount exactly one MonoBehaviour** on their GameObject (`Player` / `Enemy`). Input and AI are **not** separate MonoBehaviour components — use pure C# **`PlayerInputHandler`** and **`EnemyAI`** classes in Demo/, constructed and held as fields inside `Player` / `Enemy`, invoked from `Update` before or after the fixed tick chain as needed. HUD components (`PlayerHUD`, `EnemyHUD`) live on separate UI GameObjects, hold **`IEventBus`** (not concrete `EventBus`), and are the normal exception.
+
+## Per-Frame Tick Order
+
+Each entity's MonoBehaviour `Update` must drive internal systems in this **fixed order**:
+
+1. `BuffSystem.Tick(deltaTime)`
+2. `AbilitySystem.Tick(deltaTime)` (includes `CooldownManager.Tick`)
+3. `StateMachine.Update()`
+4. **Entity-level death check** — if `CurrentState != DeadState` and `Damageable.CurrentHP <= 0`, call `StateMachine.ChangeState(DeadState)` using the cached DeadState instance
+
+DoT (Burn) applies HP changes before the state machine updates; death is checked once in entity `Update` after step 3 — do not duplicate `CurrentHP <= 0` checks inside individual non-dead states.
+
+## Composition Root
+
+`GameManager` is the composition root for cross-entity concerns. It owns and creates:
+- A global `IEventBus` / `EventBus` instance — used only for events that legitimately need to reach multiple, independent listeners across entities (currently: `EntityDiedEvent`). Do not publish per-entity gameplay events (`HpChangedEvent`, `DamageEvent`, `HealEvent`, `BuffAppliedEvent`, `CooldownStartedEvent`, `CooldownEndedEvent`) on this instance.
+- `DamagePipeline`
+
+In `Awake`, after creating the above, call **`InjectSharedServices(IEventBus globalEventBus, DamagePipeline pipeline)`** on each wired `Player` / `Enemy` (`[SerializeField]` references). **`InjectSharedServices` is the sole entity init entry** — it stores shared dependencies and calls private **`ConstructGameplaySystems()`** to build all entity-local pure C# systems (`CharacterStats`, local `EventBus`, `Damageable`, `BuffSystem`, `AbilitySystem`, `StateMachine`, cached states, `PlayerInputHandler`/`EnemyAI`). **Do not construct gameplay systems in `Player`/`Enemy` `Awake`.** **Script Execution Order: `GameManager` before `Player`/`Enemy`** so injection completes before any `Start`/`Update` that depends on gameplay systems.
+
+`Player` and `Enemy` are each their own composition root for entity-local concerns. Each one creates and owns:
+- Its own local `IEventBus` / `EventBus` instance — used for all per-entity gameplay events. UI/HUD components bind to the local bus of the specific entity they display, not the global bus.
+- Its own `BuffSystem` instance (`ICombatEntity owner` + local `IEventBus` in constructor), since buff state (stacks, durations) is per-entity. Do not move `BuffSystem` creation into `GameManager` — that would force entities to share buff state.
+- Its own `AbilitySystem` instance (with internal `CooldownManager`, constructor-injected `IRandomProvider`, and constructor-injected `DamagePipeline` from `GameManager`), since cooldown state is per-entity.
+
+**Shared `DamagePipeline` instance.** `GameManager` creates **one** `DamagePipeline` and injects the **same reference** into every entity's `AbilitySystem`. Modifier registration (Defense → Crit) applies globally. This cannot express per-attacker outgoing modifiers (e.g. "only Player deals +10% damage") without a future per-source modifier context — documented in README "What I'd Do Differently".
+
+`DamagePipeline` is created by `GameManager` and injected into each entity's `AbilitySystem` constructor (not passed per `TryExecute` call). GameManager registers default modifiers onto DamagePipeline during Awake in **fixed order: DefenseModifier, then CritModifier**. Both are pure multiplicative modifiers — **mathematically order-independent**, but registration order is fixed for determinism and documentation. Modifier registration is GameManager's responsibility, not DamagePipeline's own initialization. `DefenseModifier` uses `damage × 100 / (100 + Defense)` and skips `DamageType.True`; `CritModifier` multiplies by `Source.Stats.GetValue(StatType.CritDamage)` when `ctx.IsCrit` (**True damage still receives crit**). The global `IEventBus` is injected into `Player`/`Enemy` only where a system genuinely needs to publish or subscribe to a cross-entity event (currently: both publish `EntityDiedEvent` from their DeadState). The local `IEventBus` is created by each `Player`/`Enemy` itself and injected into its own `Damageable`, `BuffSystem`, and `AbilitySystem` (via `CooldownManager`). Each `Player`/`Enemy` also creates an `IRandomProvider` (Demo: `UnityRandomProvider`) and injects it into `AbilitySystem`. When building `AbilityContext`, pass `AbilityTargetDeps` as `Target`, inject `CooldownManager` as `ICooldownQuery` only (not the mutable manager), inject `AbilitySystem`'s `IRandomProvider` as `Random`, and use `AbilitySystem`'s constructor-injected `DamagePipeline`. When calling `DamagePipeline.Execute`, pass the target's local `IEventBus` as `targetEventBus` via `ctx.TargetEventBus` — caller must ensure it matches `ctx.Target.EventBus`; `DamagePipeline` may `Debug.Assert` this in development builds. No other class creates `EventBus` or `DamagePipeline` instances. Do not use `UnityEngine.Random` in pure C# gameplay code — use `IRandomProvider` via `AbilityContext.Random`.
+
+**Ability depends on Buff.** Hit-type abilities apply on-cast buffs via **`AbilityBase.ApplyOnCastBuff(in ctx)`**, not inline `TargetBuffApplier.Apply(...)` at each call site. `AbilitySystem` passes `AbilityTargetDeps` into `AbilityContext.Target` when building context — use `IBuffApplier` via `ctx.TargetBuffApplier`, not the concrete `BuffSystem` type. `AbilitySystem.TryExecute(int, caster, AbilityTargetDeps)` returns **`TryExecuteResult`** and only orchestrates cooldown after `AbilityExecuteResult.Success`; it must not apply buffs itself. **`AbilityConfig.OnCastBuff`** applies when `Execute` returns `Success` (no miss/dodge gate), including when final pipeline damage is 0. `HealAbility` and `DashAbility` do not call `ApplyOnCastBuff`.
+
+**ICooldownQuery, not CooldownManager, on AbilityContext.** `AbilitySystem` owns `CooldownManager` and passes **`ICooldownQuery`** through `AbilityContext` at execution time along with `AbilityIndex`, `Config`, and `Random`. `[SerializeReference] IAbility` assets must not take `CooldownManager` or `IRandomProvider` in their constructor — they stay stateless. `AbilityBase.CanExecute` reads cooldown via **`ctx.CooldownQuery.IsOnCooldown(ctx.AbilityIndex)`** and **must not mutate gameplay state**. `AbilitySystem` calls `CooldownManager.StartCooldown` after `Execute` returns `AbilityExecuteResult.Success`, not inside the ability implementation. Abilities must not receive `StartCooldown` through context.
+
+**Ability slots and stat bases.** `PlayerConfig` / `EnemyConfig` (Demo/) hold **`StatBaseEntry[]`** for `CharacterStats` base values (via `GetBaseStats()`) and **`List<AbilitySlot>`** where each slot bundles `AbilityConfig Config` + `[SerializeReference] IAbility Implementation`. `Player`/`Enemy` construct `CharacterStats` from config inside **`ConstructGameplaySystems()`** (called from `InjectSharedServices`), not in `Awake`. `AbilityIndex` equals list index.
+
+**GlobalEventBus on entities.** `Player` / `Enemy` expose **`IEventBus GlobalEventBus`** set only by `InjectSharedServices` — used by `*DeadState.Enter` to publish `EntityDiedEvent`. Do not create the global bus on entities; do not publish `EntityDiedEvent` on the local bus.
+
+**BuffSystem owner.** `BuffSystem` constructor takes `ICombatEntity owner` + local `IEventBus`. `IBuffApplier.Apply(BuffConfig config, ICombatEntity instigator = null)` applies to `_owner`; `instigator` stored on new `BuffInstance`. `Tick()` uses `_owner` for `IBuffEffect` callbacks. **Do not** call `ClampCurrentHPToMax` here — MaxHP changes go through `CharacterStats` callback (see below).
+
+**MaxHP clamp invariant.** All MaxHP mutations **must** go through `CharacterStats.AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource` — never bypass Stats. `CharacterStats.RegisterStatChangedCallback(Action<StatType>)` is invoked when a modifier change affects `StatType.MaxHP` only. `Damageable` registers at construction: `MaxHP` → `ClampCurrentHPToMax()`. Any future path (buff, equipment, level-up) that modifies MaxHP via Stats API auto-clamps CurrentHP.
+
+**IBuffEffect must be stateless.** `[SerializeReference] IBuffEffect` on `BuffConfig` is a shared flyweight — no per-entity runtime fields. State lives on `BuffInstance` (including `Instigator`).
+
+**DamageEvent publishing.** `Damageable.TakeDamage` updates `CurrentHP` and publishes `HpChangedEvent` on the entity's local bus. It does **not** publish `DamageEvent`. `TakeDamage` throws `ArgumentOutOfRangeException` when `amount < 0` and clamps `CurrentHP` to `>= 0` after applying damage. `DamagePipeline.Execute` clamps final damage to `>= 0`, calls `TakeDamage` (which publishes `HpChangedEvent`), then publishes `DamageEvent` on the target's local bus for combat attribution (Source, DamageType, IsCrit). DoT paths (`BurnEffect`) bypass `DamagePipeline` and publish only `HpChangedEvent` — no `DamageEvent` attribution. UI HP bars subscribe to `HpChangedEvent`; combat feedback (floating text, crit VFX) may subscribe to `DamageEvent`. This keeps `DamageEvent` in Combat/Events/ without a Character ↔ Combat circular asmdef dependency.
+
+**Crit roll site.** Hit-type abilities **must** call **`AbilityBase.RollCrit(in ctx)`** before building `DamageContext` — not enforced by compiler; copy `DamageAbility` for new damage abilities. `CritModifier` only reads `ctx.IsCrit`. Never use `UnityEngine.Random`. **Mitigation:** unit tests on `DamageAbility` with a mock `IRandomProvider` must cover crit and non-crit paths; new damage abilities copy `DamageAbility` — do not add a separate damage ability without equivalent `RollCrit` coverage.
+
+## TryExecute Control Flow
+
+`AbilitySystem.TryExecute(int abilityIndex, ICombatEntity caster, AbilityTargetDeps target)` returns **`TryExecuteResult`** and is the sole entry point for ability activation:
+
+1. **Validate index** — out of range → throw `ArgumentOutOfRangeException` (caller bug).
+2. **Build `AbilityContext`** — inject `ICooldownQuery`, `DamagePipeline`, `Random`, slot `Config`, `Target`.
+3. **`CanExecute(ctx)`** — if `false` (cooldown), return **`TryExecuteResult.OnCooldown`** immediately; **do not call `Execute`**.
+4. **`executeResult = Execute(ctx)`** — returns **`AbilityExecuteResult`** (`Success`, `Interrupted`, `NoTarget`, `OutOfRange` only).
+5. **If `executeResult == AbilityExecuteResult.Success`** → `CooldownManager.StartCooldown(abilityIndex, config.CooldownDuration)`.
+6. **Map `executeResult` to the same-named `TryExecuteResult` value** and return to caller.
+
+Buff application and damage live inside `Execute` (e.g. `DamageAbility` calls Pipeline then `ApplyOnCastBuff` before returning `Success`).
+
+## AbilityExecuteResult / TryExecuteResult Semantics
+
+| Value | Enum | Returned by | Meaning |
+|---|---|---|---|
+| `OnCooldown` | **`TryExecuteResult` only** | `TryExecute` | `CanExecute` failed; `Execute` was not invoked |
+| `Success` | Both | `Execute`; mapped by `TryExecute` | Ability logic ran; cooldown started by AbilitySystem |
+| `Interrupted` | Both | `Execute`; mapped by `TryExecute` | Ability aborted (e.g. `DashAbility` when Caster is not `Player`) |
+| `NoTarget` / `OutOfRange` | Both | `Execute` (reserved) | Target validation failed; demo does not implement yet |
+
+## Buff Stacking × StatModifier
+
+When an `IBuffEffect` adds a `StatModifier` (e.g. `SlowEffect`), `Source` **must be `BuffInstance`**, never `BuffConfig`.
+
+| Stack mode | StatModifier behavior |
+|---|---|
+| **Independent** | One modifier per `BuffInstance`; remove via `RemoveModifiersFromSource(instance)` |
+| **Stack** | One modifier per instance; `Value = configBase × StackCount`; on stack change, **remove + re-add** a new `StatModifier` (immutable — no `UpdateModifier`) |
+| **Refresh** | Do not add a new modifier; reset instance duration only |
+
+## ICombatEntity Contract
+
+`ICombatEntity` (Character/) exposes only `Stats` and `Damageable`. It intentionally does **not** expose `StateMachine`, `EventBus`, or `IBuffApplier`. Execution dependencies for abilities are bundled in `AbilityTargetDeps` (Entity + EventBus + BuffApplier), built via **`IAbilityTargetProvider.ToAbilityTarget()`** on `Player`/`Enemy`. `AbilityContext` carries `Target` (`AbilityTargetDeps`), `ICooldownQuery`, and `Random`. All `IAbility` methods use **`in AbilityContext`**. Self-target and targetless abilities (Heal, Dash) pass the **caster's own** `ToAbilityTarget()` as the target bundle — a deliberate portfolio simplification. Demo-layer code that needs `StateMachine` (e.g. `DashAbility`) narrows `ICombatEntity` to a concrete type such as `Player`.
+
+## Dependency Injection
+
+Dependencies are always injected via constructor. Do not resolve dependencies at runtime using:
+- `FindObjectOfType<T>()`
+- `GameObject.Find()`
+- Any service locator or static accessor pattern
+
+`GetComponent<T>()` is allowed only inside MonoBehaviour adapter classes (`Player`, `Enemy`, and similar Unity-facing adapters), and only during initialization (`Awake`/`Start`). The result must be cached in a field, never called repeatedly inside `Update` or other per-frame methods. `GetComponent<T>()` must never appear inside a pure C# class.
+
+**Construction order: `CharacterStats` before `Damageable`.** `CharacterStats` is constructed with **`IReadOnlyDictionary<StatType, float> baseValues`** from **`PlayerConfig.GetBaseStats()`** / **`EnemyConfig.GetBaseStats()`** (Demo). `Damageable` takes a `CharacterStats` reference in its constructor and reads `MaxHP` from it on every access (see `type-design.mdc`) rather than caching it — construct `CharacterStats` first, then `Damageable`. When generating `Player`/`Enemy` initialization code: **`InjectSharedServices` → `ConstructGameplaySystems()`** → `new CharacterStats(_config.GetBaseStats())` → local `EventBus` → `new Damageable(...)` → …
+
+## Shared Services
+
+Do not implement shared services as static classes or singletons. `EventBus`, `DamagePipeline`, and `IRandomProvider` are instances with explicit lifetimes. `DamagePipeline` and the global `EventBus` are owned by `GameManager`; the local `EventBus` on each entity is owned by that `Player`/`Enemy`; `BuffSystem` is an instance owned by the entity holding it; `IRandomProvider` is owned per-entity and injected into `AbilitySystem` (see Composition Root above). None of these are ever a static class or singleton — do not use `UnityEngine.Random` in pure C# gameplay code.
+
+## Event Bus
+
+Use `IEventBus` (interface) everywhere except in `GameManager`, `Player`, and `Enemy` where `EventBus` (concrete class) is instantiated. This allows test code to inject a mock or no-op implementation. Do not hold a reference to the concrete `EventBus` class outside of these composition roots. **HUD components use `IEventBus` fields**, not `EventBus`.
+
+**HUD local bus wiring (canonical).** `PlayerHUD` / `EnemyHUD` hold `[SerializeField] Player` / `Enemy`, resolve the entity's local bus in **`Start`** (not HUD `Awake`) via **`_player.ToAbilityTarget().EventBus`** / **`_enemy.ToAbilityTarget().EventBus`**. Do **not** add a separate `LocalEventBus` property on `Player`/`Enemy` — reuse `IAbilityTargetProvider`. Cooldown radial fill: **`_player.AbilitySystem.CooldownQuery.GetNormalized(index)`** in HUD `Update` (`AbilitySystem` exposes read-only **`ICooldownQuery CooldownQuery`**).
+
+There are two kinds of `IEventBus` instance in this project, and they are not interchangeable:
+- **Local** — created and owned by each `Player`/`Enemy`. Carries per-entity gameplay events (`HpChangedEvent`, `DamageEvent`, `HealEvent`, `BuffAppliedEvent`, `BuffRemovedEvent`, `CooldownStartedEvent`, `CooldownEndedEvent`). UI/HUD HP bars bind to `HpChangedEvent` on the specific entity's local bus. Cooldown radial fill is **pulled** via `ICooldownQuery.GetNormalized` in HUD `Update`, not pushed every frame.
+- **Global** — created and owned by `GameManager`. Carries low-frequency, cross-entity events that multiple independent systems need to observe (currently only `EntityDiedEvent`). Do not route per-entity gameplay events through the global bus, and do not route `EntityDiedEvent`-style cross-entity events through a local bus.
+
+**Per-entity bus tradeoff (portfolio):** events like `DamageEvent` do not carry a Target field; identity is implied by which local bus published. This works for 1v1 HUD isolation. Multi-entity combat logs, damage meters, and replay typically need events with explicit Target or a central aggregator — document in README, do not expand scope here.
+
+`EventBus.Publish` is a synchronous, **zero-allocation** call — it invokes a combined delegate stored in `Dictionary<Type, Delegate>` directly. Subscribe/Unsubscribe merge handlers into that delegate; **never** call `Delegate.GetInvocationList()` inside `Publish`. Do not change to deferred/queued dispatch without an explicit request.
+
+**EventBus is a notification system, not a control system.** A class may only change its own gameplay state because one of its own methods decided to (e.g. `BuffSystem.Apply` deciding whether to add a buff). Do not write a handler that mutates state in a different class than the one performing the gameplay logic — the publishing event communicates "this happened," not "go do this."
+
+## Documented Invariants
+
+- **Damage modifier math:** `DefenseModifier` uses `damage × 100 / (100 + Defense)` and skips `DamageType.True`; `CritModifier` multiplies by `StatType.CritDamage` when `ctx.IsCrit` (True still crits). Multiplicative modifiers commute; GameManager registers Defense → Crit for fixed determinism. Pipeline allows **multiplicative modifiers only** — do not add flat/subtractive modifiers without phased pipeline.
+- **Shared DamagePipeline:** one instance, all entities — no per-attacker outgoing modifier list in demo scope.
+- **Two result enums:** `AbilityExecuteResult` for `Execute`; `TryExecuteResult` for `TryExecute` (includes `OnCooldown`).
+- **On-cast buff:** `AbilityConfig.OnCastBuff`; applies on `Execute` → `Success`, not after hit confirm.
+- **Buff StatModifier source:** `IBuffEffect` implementations that add stat modifiers must pass the **`BuffInstance`** as `StatModifier.Source`, never `BuffConfig`.
+- **Buff stack × StatModifier:** Independent = one modifier per instance; Stack = one modifier per instance with `Value = base × StackCount`, updated via remove + re-add; Refresh = duration reset only, no new modifier.
+- **Cooldown event identity:** `AbilityIndex` on `CooldownStartedEvent` / `CooldownEndedEvent` matches fixed slot index. Valid only while slot list is static; dynamic slot lists need AbilityId/Tag (see README "What I'd Do Differently").
+- **CanExecute purity:** `CanExecute` must be side-effect free — read-only checks via `ICooldownQuery` only.
+- **MaxHP clamp:** Any MaxHP change via `CharacterStats` triggers registered callback → `Damageable.ClampCurrentHPToMax()`. Non-MaxHP stat changes must not invoke the clamp callback.
+- **DeadState re-entry:** Entity `Update` death check requires `CurrentState != DeadState` before transitioning; `EntityDiedEvent` publishes only in `DeadState.Enter`.
+
+## StateMachine Transition Pattern
+
+This sample project uses Pull-style transitions by default: a state checks **state-specific** exit conditions inside `Update(owner)` and calls `owner.StateMachine.ChangeState(cachedState)` using **pre-allocated state instances** cached on `Player`/`Enemy` (see `performance.mdc`). Do not introduce Push-style transition tables unless explicitly requested.
+
+**Death is an any-state transition**, not duplicated in every non-dead state. After `StateMachine.Update()`, entity `Update` checks `CurrentState != DeadState && Damageable.CurrentHP <= 0` and transitions to cached `DeadState` once.
+
+There is one accepted Push-style exception: an external system reacting to a one-shot event may call `ChangeState` directly. `DashAbility` casts `ctx.Caster` to `Player` and calls `player.StateMachine.ChangeState(player.DashState)`.
+
+`*DeadState.Enter` publishes `EntityDiedEvent` on the global bus once — do not publish death events from `Damageable`. DeadState does not transition out.
+
+```csharp
+// Correct — state-specific Pull transition; death handled in entity Update, not here
+public class EnemyChaseState : IState<Enemy>
+{
+    public void Update(Enemy owner)
+    {
+        // chase / attack logic only
+    }
+}
+
+// Correct — entity Update after StateMachine.Update()
+void Update()
+{
+    _buffSystem.Tick(dt);
+    _abilitySystem.Tick(dt);
+    _stateMachine.Update();
+    if (_stateMachine.CurrentState != _deadState && _damageable.CurrentHP <= 0f)
+        _stateMachine.ChangeState(_deadState);
+}
+
+// Correct — Dead state publishes once on Enter
+public class EnemyDeadState : IState<Enemy>
+{
+    public void Enter(Enemy owner)
+    {
+        owner.GlobalEventBus.Publish(new EntityDiedEvent(owner));
+    }
+}
+
+// Correct — Push exception in Demo layer
+public class DashAbility : AbilityBase
+{
+    public override AbilityExecuteResult Execute(in AbilityContext ctx)
+    {
+        if (ctx.Caster is not Player player)
+            return AbilityExecuteResult.Interrupted;
+        // ... move player ...
+        player.StateMachine.ChangeState(player.DashState);
+        return AbilityExecuteResult.Success;
+    }
+}
+
+// Wrong — Push style, StateMachine owns transition logic
+stateMachine.AddTransition(idleState, deadState, () => hp <= 0);
+```
+
+## Common Generation Mistakes
+
+Two specific mistakes Cursor tends to make in this codebase, not already covered by the rules above:
+
+**StateMachine generic constraints.** `StateMachine<TOwner>` and `IState<TOwner>` use unconstrained generics. Do not add `where TOwner : class` or `where TOwner : MonoBehaviour` — `TOwner` can be any type, and adding a constraint here doesn't match the actual design intent.
+
+**Initialize() instead of constructor injection.** Cursor may generate `public void Initialize(Dependency dep)` methods as a substitute for constructor parameters on pure C# classes. Use this pattern only when Unity itself constructs the object (`MonoBehaviour`, `ScriptableObject`) and a constructor isn't available. Every pure C# class in this project takes its dependencies through the constructor.
+
+**`IAbility.Execute` returning `void`.** `Execute` returns `AbilityExecuteResult`. Demo `Execute` implementations return `Success` or `Interrupted` (DashAbility when Caster is not Player); `NoTarget` / `OutOfRange` are reserved.
+
+**Using `AbilityExecutionResult` or putting `OnCooldown` on `Execute`.** Use **`AbilityExecuteResult`** for `IAbility.Execute` and **`TryExecuteResult`** for `AbilitySystem.TryExecute`. `OnCooldown` exists only on `TryExecuteResult`.
+
+**Separate MonoBehaviour for input/AI on Player/Enemy.** Use pure C# `PlayerInputHandler` / `EnemyAI` fields inside the single entity MonoBehaviour.
+
+**Invalid `abilityIndex` in `TryExecute`.** Throw `ArgumentOutOfRangeException`; do not return a reserved enum value.
+
+**Caching `MaxHP` on `Damageable`.** `Damageable.MaxHP` must be a read-only property that reads `CharacterStats.GetValue(StatType.MaxHP)` on every access, not a field set once at construction. Caching it reintroduces a stale-data bug once anything (a buff) modifies `MaxHP` at runtime — see `type-design.mdc` for the full rationale.
+
+**Publishing `DamageEvent` from `Damageable`.** `TakeDamage` publishes `HpChangedEvent`, not `DamageEvent`. `DamagePipeline.Execute` publishes `DamageEvent` after damage is applied.
+
+**Passing target bus/applier as separate TryExecute parameters.** Pack them in `AbilityTargetDeps`; call `TryExecute(int, caster, AbilityTargetDeps)`.
+
+**Passing DamagePipeline per TryExecute call.** Inject `DamagePipeline` via `AbilitySystem` constructor instead.
+
+**Applying on-cast buffs in `AbilitySystem.TryExecute`.** On-cast buff application belongs inside hit-type abilities via **`ApplyOnCastBuff(in ctx)`**; `AbilitySystem` only starts cooldown after `Success`.
+
+**Inlining OnCastBuff instead of `ApplyOnCastBuff`.** Hit-type abilities must call `ApplyOnCastBuff(in ctx)`, not duplicate the null-check + `Apply` inline.
+
+**Using `BuffConfig` as StatModifier.Source.** Buff-applied modifiers must use **`BuffInstance`** as `Source`, not the shared `BuffConfig` asset — required for Independent stacking (see `type-design.mdc`).
+
+**Putting `BuffSystem` (concrete) on `AbilityContext`.** Use `IBuffApplier` via `ctx.TargetBuffApplier` instead — abilities must not depend on BuffSystem tick/apply internals.
+
+**Putting `CooldownManager` on `AbilityContext`.** Use `ICooldownQuery` only — abilities must not call `StartCooldown`.
+
+**Putting `DamageEvent` in Core/Events/.** Follow the Event Placement table above.
+
+**Using `UnityEngine.Random` in pure C# gameplay code.** Use `IRandomProvider` via `AbilityContext.Random`; inject a mock in tests.
+
+**Per-frame `CooldownEvent` push for HUD fill.** Use `ICooldownQuery.GetNormalized` in HUD `Update` + `CooldownStartedEvent`/`CooldownEndedEvent` for discrete UI state.
+
+**Omitting `RollCrit` on new damage abilities.** Every ability that calls `DamagePipeline` must call `RollCrit(in ctx)` first — use `DamageAbility` as template.
+
+**Bypassing CharacterStats for MaxHP.** Never mutate MaxHP outside `CharacterStats` modifier APIs; `ClampCurrentHPToMax` depends on `RegisterStatChangedCallback`.
+
+**Omitting `in` on `AbilityContext` parameters.** All `IAbility` / `AbilityBase` methods must use `in AbilityContext ctx`.
+
+**HUD holding concrete `EventBus`.** Inject and store `IEventBus` on HUD components.
+
+**Publishing `EntityDiedEvent` on local bus.** Use `owner.GlobalEventBus` only.
+
+**Hardcoding stat bases in Player/Enemy.** Read from `PlayerConfig` / `EnemyConfig` via `GetBaseStats()`.
+
+**Skipping `InjectSharedServices`.** `GlobalEventBus` and shared `DamagePipeline` must come from `GameManager`, not entity `Awake` alone.
+
+**Constructing gameplay systems in `Player`/`Enemy` `Awake`.** All pure C# system construction belongs in **`InjectSharedServices` → `ConstructGameplaySystems()`**, triggered by `GameManager.Awake`.

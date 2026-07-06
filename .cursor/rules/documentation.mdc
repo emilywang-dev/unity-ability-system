@@ -1,0 +1,45 @@
+---
+description: Comment and documentation conventions for unity-ability-system, tuned to avoid AI-generated comment bloat.
+globs: Assets/Scripts/**/*.cs
+---
+
+# Documentation Rules
+
+Do not generate XML doc comments (`/// <summary>`) unless explicitly requested. Public interface members should be self-explanatory from their names and signatures — `IDamageModifier.Modify(float damage, DamageContext ctx)` does not need a comment.
+
+## When to Comment
+
+Add a short inline comment only where the code deviates from the obvious approach and an interviewer reading quickly might assume a mistake. The cases in this project:
+
+- `DamageContext` is a `readonly struct` that holds `ICombatEntity` interface references — note that this does not box (see `type-design.mdc`).
+- `Damageable.MaxHP` live proxy; **any MaxHP change via `CharacterStats` API** → `RegisterStatChangedCallback` → `ClampCurrentHPToMax()` (not BuffSystem-only); non-MaxHP stat changes do not trigger clamp.
+- `Damageable.TakeDamage` / `Heal` reject `amount < 0` with `ArgumentOutOfRangeException`.
+- `Damageable.TakeDamage` does not publish `DamageEvent` — `DamagePipeline.Execute` publishes it after applying damage (see `architecture.mdc`). DoT bypasses Pipeline; only `HpChangedEvent`.
+- `EntityDiedEvent` on global bus only; `Victim` field is the dead entity, not attacker.
+- On-cast buff: **`ApplyOnCastBuff`** → `TargetBuffApplier.Apply(config, ctx.Caster)` on `Execute` → `Success`; not after hit confirm; 0 damage still applies buff if `Success`.
+- Damage abilities **must** call **`RollCrit(in ctx)`** before Pipeline — never `UnityEngine.Random`.
+- `AbilitySystem.TryExecute` returns **`TryExecuteResult`**; `IAbility.Execute` returns **`AbilityExecuteResult`** — two enums; `OnCooldown` only on `TryExecuteResult`.
+- `AbilitySystem.TryExecute` takes `AbilityTargetDeps`, not separate target/bus/applier parameters — build via `IAbilityTargetProvider.ToAbilityTarget()`. Self-target abilities pass caster's own deps.
+- `AbilityContext` uses `ICooldownQuery`, not `CooldownManager` — abilities cannot start cooldown; `AbilitySystem` does after `Success`.
+- Shared `DamagePipeline` — one GameManager instance for all entities; no per-attacker outgoing modifiers in demo.
+- Cooldown HUD fill is **pulled** via `ICooldownQuery.GetNormalized` in `Update`; `CooldownStartedEvent`/`CooldownEndedEvent` are discrete UI transitions only.
+- HUD local bus: **`Start`** → `_player.ToAbilityTarget().EventBus` (no separate `LocalEventBus` on Player); cooldown via `_player.AbilitySystem.CooldownQuery`.
+- HUD components store **`IEventBus`**, not concrete `EventBus`.
+- Per-entity local EventBus implies events lack Target field — portfolio tradeoff for 1v1; scaling needs explicit Target on events or central aggregator.
+- `CharacterStats.GetValue` uses dirty-flag caching — `Damageable.MaxHP` still proxies `GetValue` on every access; only the Stats layer caches, not Damageable (see `type-design.mdc`).
+- `CharacterStats(IReadOnlyDictionary<StatType, float> baseValues)` — base values from `PlayerConfig`/`EnemyConfig.GetBaseStats()` at entity init; modifiers added via API.
+- `GlobalEventBus` on Player/Enemy — injected by `GameManager.InjectSharedServices`; DeadState publishes `EntityDiedEvent` there only.
+- Entity init: all pure C# systems built in `InjectSharedServices` → `ConstructGameplaySystems()`; not in `Player`/`Enemy` `Awake`.
+- `SlowEffect` passes `BuffInstance` as `StatModifier.Source`, not `BuffConfig` — required for Independent stack removal. Stack mode: `Value = base × StackCount`.
+- `DefenseModifier` uses multiplicative reduction `damage × 100 / (100 + Defense)` — not subtractive armor. `DamageType.True` skips Defense only; Crit still applies.
+- Entity tick order: `BuffSystem.Tick` → `AbilitySystem.Tick` → `StateMachine.Update` → entity any-state death check — DoT before death; death not duplicated per state.
+- `EventBus.Publish` must not allocate — combined delegate, no `GetInvocationList()`.
+
+```csharp
+// Correct — one line, explains the non-obvious part
+// Bypasses DamagePipeline: Buff/Combat are sibling asmdef layers; DoT has no DamageEvent attribution.
+public void OnTick(BuffInstance instance, ICombatEntity target, float deltaTime)
+{
+    target.Damageable.TakeDamage(instance.Config.DamagePerSecond * deltaTime);
+}
+```

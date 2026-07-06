@@ -1,0 +1,28 @@
+{
+    "name": "Game.Tests",
+    "rootNamespace": "",
+    "references": [
+        "GUID:582f98455f5be374b9c37c09979c9f59",
+        "GUID:665fba69d62453445a0a0fa689a61c21",
+        "GUID:67bed7c2528a2004a9c61fa9e052305c",
+        "GUID:20abc8317e31e9048bbe879013e72fb0",
+        "GUID:057bee68e0e766d43851bf70ce95a270",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

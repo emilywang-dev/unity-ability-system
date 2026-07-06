@@ -1,0 +1,60 @@
+---
+description: Unit test constraints for unity-ability-system. Applies to the Tests/ assembly only.
+globs: Assets/Tests/**/*.cs
+---
+
+# Testing Rules
+
+Tests must be fast, deterministic, and independent of the Unity scene.
+
+- `Game.Tests.asmdef` must reference `UnityEngine.TestRunner`, `UnityEditor.TestRunner`, and `nunit.framework.dll` (`overrideReferences: true`).
+- Do not use `[UnityTest]` or `IEnumerator` test methods.
+- Do not use `UnityEngine.TestTools` in unit test files.
+- Do not instantiate `MonoBehaviour` subclasses in tests.
+- Instantiate pure C# gameplay objects with `new` directly in test methods or `[SetUp]`.
+- For `AbilityConfig` / `BuffConfig`, use `ScriptableObject.CreateInstance<T>()` in Editor tests and assign fields via public test hooks or `[SerializeField]` + reflection — gameplay code must not rely on SO construction outside Unity assets.
+- Use a no-op or manual mock of `IEventBus` in tests that involve `Damageable`, `DamagePipeline`, or other event-publishing classes. Do not create a real `EventBus` in tests unless testing `EventBus` itself.
+- When testing damage flow, assert `DamageEvent` is published by `DamagePipeline.Execute` (with a mock bus), not by `Damageable.TakeDamage` alone.
+- When testing HP mutation, assert `HpChangedEvent` is published by `Damageable.TakeDamage` and `Damageable.Heal` (with a mock bus). DoT paths (BurnEffect) rely on this event for UI sync.
+- When testing heal flow, assert `HealEvent` is published by `Damageable.Heal`, not by callers that bypass it.
+- Cover `Damageable.MaxHP` changing live when `CharacterStats` is modified (e.g. after applying a `StatModifier` for `MaxHP`) — regression test for proxy-not-cached design in `type-design.mdc`.
+- Cover **`CharacterStats` MaxHP callback**: `AddModifier(MaxHP)` → registered callback → `Damageable.ClampCurrentHPToMax` (direct or via integration test wiring Stats+Damageable).
+- Cover **`CharacterStats` non-MaxHP callback**: `AddModifier(Attack)` (or other non-MaxHP stat) → registered MaxHP callback **not** invoked / `ClampCurrentHPToMax` not called.
+- Cover **`Damageable.ClampCurrentHPToMax`**: MaxHP decreases → CurrentHP clamped + `HpChangedEvent`.
+- Cover `Damageable.Heal`: throws on `amount < 0`; clamps to live `MaxHP`.
+- Cover `CharacterStats` dirty-flag cache: after `AddModifier`, `GetValue` reflects change; cache invalidates on `RemoveModifier`.
+- Cover `CharacterStats` construction: `new CharacterStats(baseValues)` reads base; empty/null base throws.
+- Cover `SlowEffect` Independent stacking: two instances on same target, remove one instance's modifier without affecting the other (`StatModifier.Source == BuffInstance`).
+- Cover `SlowEffect` Stack stacking: three stacks → modifier Value = configBase × 3.
+- Cover `BuffSystem` Refresh mode: re-apply resets duration without adding a second modifier.
+- Cover `DamagePipeline.Execute` clamping final damage to `>= 0` before calling `TakeDamage`.
+- Cover `DefenseModifier` multiplicative formula: `damage × 100 / (100 + Defense)`.
+- Cover `DamageType.True`: skips DefenseModifier but **still receives CritModifier** when `IsCrit`.
+- Cover pipeline numeric results with Defense + Crit together — **do not** add a test that only asserts modifier registration order is commutative; current pipeline assumes multiplicative modifiers only.
+- Cover `CharacterStats` mixed Flat + Percent with the documented formula: `(base + sum(flat)) × product(1 + percent_i)` — e.g. base=100, +50 flat, +10% and +20% → 198.
+- Cover `Damageable.TakeDamage`: throws on `amount < 0`; clamps `CurrentHP` to `>= 0` after large damage.
+- Cover `BuffSystem`: owner injection; `Apply(config, instigator)` sets `BuffInstance.Instigator`; **no** direct `ClampCurrentHPToMax` in BuffSystem (Stats callback handles MaxHP); Apply publishes `BuffAppliedEvent`; remove publishes `BuffRemovedEvent`.
+- Cover `CooldownManager`: `StartCooldown` publishes `CooldownStartedEvent`; tick to zero publishes `CooldownEndedEvent`; `GetNormalized` returns expected values.
+- Cover `EventBus`: Subscribe/Publish/Unsubscribe routing; **`Publish` does not call `GetInvocationList()`** (implementation invariant — smoke test with multiple subscribers).
+- Cover ability execution at two levels: (1) **ability level** — real `CooldownManager` + mock `IBuffApplier` / `IRandomProvider`; `in AbilityContext`; `DamageAbility` must call `RollCrit`; OnCastBuff → `Apply(config, caster)`. (2) **`AbilitySystem` level** — `TryExecute(index, caster, deps)` returns **`TryExecuteResult`**; `!CanExecute` → `TryExecuteResult.OnCooldown` without calling `Execute`; `AbilityExecuteResult.Success` → cooldown started; non-`Success` → no cooldown; no Apply in AbilitySystem; `DamagePipeline` from constructor; invalid `abilityIndex` throws `ArgumentOutOfRangeException`.
+- **Demo layer (manual / Play Mode only — `Game.Tests` excludes Demo asmdef):** entity Update death order; GameManager injection; DashAbility Push state; DashAbility Caster not `Player` → `AbilityExecuteResult.Interrupted`; `*DeadState.Enter` publishes `EntityDiedEvent` on global bus.
+
+```csharp
+// Correct — no scene, no MonoBehaviour
+[Test]
+public void TakeDamage_ReducesCurrentHP()
+{
+    var stats = new CharacterStats(new Dictionary<StatType, float> { { StatType.MaxHP, 100f } });
+    var eventBus = new NoOpEventBus();
+    var damageable = new Damageable(stats, eventBus);
+    damageable.TakeDamage(30f);
+    Assert.AreEqual(70f, damageable.CurrentHP);
+}
+
+// Wrong — requires scene, Unity lifecycle
+[UnityTest]
+public IEnumerator TakeDamage_ReducesCurrentHP()
+{
+    yield return null;
+}
+```

@@ -1,0 +1,17 @@
+{
+    "name": "Game.Buff",
+    "rootNamespace": "",
+    "references": [
+        "GUID:582f98455f5be374b9c37c09979c9f59",
+        "GUID:20abc8317e31e9048bbe879013e72fb0"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

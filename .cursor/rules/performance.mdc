@@ -1,0 +1,52 @@
+---
+description: Performance guidelines for hot-path code in unity-ability-system (Tick/Update methods).
+globs: Assets/Scripts/**/*.cs
+---
+
+# Performance Rules
+
+These apply to hot paths: per-frame code (`BuffSystem.Tick`, `CooldownManager.Tick`, `StateMachine<TOwner>.Update`, any `MonoBehaviour.Update`/`FixedUpdate`/`LateUpdate`) and per-invocation code that runs frequently in combat (`DamagePipeline.Execute`). Initialization and configuration-loading code (constructors, `Awake`, ScriptableObject loading) is not held to these constraints — allocating there is fine.
+
+## Allocations
+
+Avoid allocations inside hot-path methods. This includes:
+- `new List<T>()`, `new Dictionary<K,V>()`, or any collection allocation inside `Tick`/`Update` — allocate once in the constructor or `Awake`, reuse and clear instead.
+- Boxing value types into `object` or an interface inside a hot path (e.g. passing an `int`/`float`/custom struct somewhere it gets implicitly converted to `object` or a non-implementing interface type). Note: storing an interface reference (`ICombatEntity`) inside a `struct` like `DamageContext` does **not** box, since `ICombatEntity` is implemented by reference types (`Player`/`Enemy`) in this project — `DamageContext` is a `readonly struct` specifically to avoid a heap allocation for the context object itself on every damage calculation, not to avoid boxing (see `type-design.mdc`).
+- Per-frame string concatenation or `string.Format`/interpolation for anything that isn't user-facing debug output behind a flag.
+- `Delegate.GetInvocationList()` inside `EventBus.Publish` — merges handlers on Subscribe/Unsubscribe instead.
+
+## LINQ
+
+Avoid LINQ inside `Tick`/`Update` methods — `Where`, `Select`, `OrderBy` and similar allocate iterators and closures per call. LINQ is acceptable in initialization and configuration code (e.g. building a list of `IDamageModifier` from a config at startup) where it runs once, not every frame.
+
+```csharp
+// Wrong — inside BuffSystem.Tick, runs every frame
+var expired = _instances.Where(i => i.RemainingTime <= 0).ToList();
+
+// Correct — manual loop, no per-frame allocation
+for (int i = _instances.Count - 1; i >= 0; i--)
+{
+    if (_instances[i].RemainingTime <= 0)
+        _instances.RemoveAt(i);
+}
+```
+
+## Component Access
+
+`GetComponent<T>()` must be called at most once per object, during initialization, and its result cached in a field. Never call `GetComponent<T>()` inside `Update` or any per-frame method. See `architecture.mdc` for the full dependency-injection rule this is part of.
+
+## Collection Reuse
+
+Where a collection's contents change every frame but its capacity is roughly stable (e.g. a list of active buffs, a list of nearby enemies), reuse the same collection instance and `Clear()` it rather than allocating a new one each frame.
+
+## State Instance Reuse
+
+`IState<TOwner>` implementations may be allocated once per entity during initialization (`Awake`) and reused across transitions. `ChangeState(cachedInstance)` is correct. Do not `new` state objects inside `Update` or other per-frame hot paths — that conflicts with the allocation rules above. Stateless flyweight state objects are preferred.
+
+## Cooldown HUD — Pull, Not Push
+
+Continuous cooldown radial fill is **pulled** by `PlayerHUD.Update` via `ICooldownQuery.GetNormalized(abilityIndex)` — do not publish per-frame cooldown progress events. `CooldownManager` publishes **`CooldownStartedEvent`** and **`CooldownEndedEvent`** only (discrete transitions). This matches industry UI practice and keeps the event bus off hot paths.
+
+## AbilityContext Passing
+
+`AbilityContext` is not a per-frame hot path, but use **`in AbilityContext ctx`** on all `IAbility` / `AbilityBase` methods to avoid defensive copies of the multi-field struct.

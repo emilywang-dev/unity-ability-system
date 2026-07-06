@@ -1,0 +1,226 @@
+---
+description: Rules governing struct vs class, immutability, and serialization for unity-ability-system.
+globs: Assets/Scripts/**/*.cs
+---
+
+# Type Design Rules
+
+## Event Types
+
+Event types should be immutable. Prefer `readonly struct`; a `class` is allowed only when the event needs polymorphism or carries a reference type that would box inside a struct. All current events in this project are simple, non-polymorphic data and must be `readonly struct`:
+
+| Event | Folder |
+|---|---|
+| `HealEvent`, `HpChangedEvent`, `CooldownStartedEvent`, `CooldownEndedEvent` | `Core/Events/` |
+| `DamageEvent`, `EntityDiedEvent` | `Combat/Events/` |
+| `BuffAppliedEvent`, `BuffRemovedEvent` | `Buff/Events/` |
+
+Do not define event types anywhere else. Place each event per `architecture.mdc`, Event Placement (lowest layer with an `Events/` folder; semantic domain when payload alone is ambiguous).
+
+```csharp
+// Correct — Combat/Events/DamageEvent.cs
+public readonly struct DamageEvent
+{
+    public readonly float Amount;
+    public readonly ICombatEntity Source;
+    public readonly DamageType DamageType;
+    public readonly bool IsCrit;
+
+    public DamageEvent(float amount, ICombatEntity source, DamageType damageType, bool isCrit) { ... }
+}
+
+// Wrong — do not silently use class for a simple data event
+public class DamageEvent { ... }
+```
+
+## Context Types
+
+`DamageContext` is a `readonly struct`, not a class. It holds `ICombatEntity` references, but storing a reference type (an interface implemented by a `MonoBehaviour`) in a struct field does not box — boxing only happens when a *value type* is converted to a reference/interface type. Using a struct here avoids a heap allocation for the context object itself on every damage calculation (a hot path), since `DamagePipeline` constructs a fresh `DamageContext` per call. Modifiers in the chain only read `ctx`, never write back to it — if a future modifier needs to write a value the rest of the chain should see, change the relevant `IDamageModifier.Modify` signature to take `ref DamageContext ctx` rather than reintroducing a class here.
+
+```csharp
+public readonly struct DamageContext
+{
+    public readonly ICombatEntity Source;
+    public readonly ICombatEntity Target;
+    public readonly DamageType DamageType;
+    public readonly bool IsCrit;
+
+    public DamageContext(ICombatEntity source, ICombatEntity target, DamageType damageType, bool isCrit) { ... }
+}
+```
+
+`AbilityContext` is a `readonly struct`, initialized through its constructor. Do not add fields to it after construction. It holds `Target` (`AbilityTargetDeps` bundle) so target Entity/EventBus/BuffApplier stay cohesive. It holds `ICooldownQuery` (not `CooldownManager`) for read-only cooldown checks. It holds `Random` (`IRandomProvider`) for crit rolls — never use `UnityEngine.Random` in abilities. It also holds `AbilityIndex` and `Config` — per-entity execution dependencies injected by `AbilitySystem`, not stored on `[SerializeReference] IAbility` assets.
+
+**All `IAbility` / `AbilityBase` methods take `in AbilityContext ctx`** to avoid defensive struct copies on a non-hot but multi-field struct.
+
+`AbilityTargetDeps` is a `readonly struct` bundling the target's execution dependencies: `Entity` (`ICombatEntity`), `EventBus` (target's local bus), and `BuffApplier` (`IBuffApplier`). `IAbilityTargetProvider.ToAbilityTarget()` on `Player`/`Enemy` builds it. `AbilitySystem.TryExecute` takes `AbilityTargetDeps` instead of separate target/bus/applier parameters. Self-target abilities pass the caster's own `ToAbilityTarget()`.
+
+```csharp
+public readonly struct AbilityContext
+{
+    public readonly ICombatEntity Caster;
+    public readonly AbilityTargetDeps Target;
+    public readonly DamagePipeline DamagePipeline;
+    public readonly ICooldownQuery CooldownQuery;
+    public readonly int AbilityIndex;
+    public readonly AbilityConfig Config;
+    public readonly IRandomProvider Random;
+
+    public ICombatEntity TargetEntity => Target.Entity;
+    public IEventBus TargetEventBus => Target.EventBus;
+    public IBuffApplier TargetBuffApplier => Target.BuffApplier;
+
+    public AbilityContext(
+        ICombatEntity caster,
+        AbilityTargetDeps target,
+        DamagePipeline damagePipeline,
+        ICooldownQuery cooldownQuery,
+        int abilityIndex,
+        AbilityConfig config,
+        IRandomProvider random) { ... }
+}
+
+// Wrong — do not expose mutable CooldownManager to abilities
+public readonly struct AbilityContext
+{
+    public readonly CooldownManager CooldownManager;
+}
+```
+
+```csharp
+[Serializable]
+public struct AbilitySlot
+{
+    public AbilityConfig Config;
+    [SerializeReference] public IAbility Implementation;
+}
+```
+
+```csharp
+public readonly struct AbilityTargetDeps
+{
+    public readonly ICombatEntity Entity;
+    public readonly IEventBus EventBus;
+    public readonly IBuffApplier BuffApplier;
+
+    public AbilityTargetDeps(ICombatEntity entity, IEventBus eventBus, IBuffApplier buffApplier) { ... }
+}
+```
+
+Do not introduce `record` types for context or event types in this project — stick to the `class`/`readonly struct` patterns above.
+
+## StatModifier
+
+`StatModifier` is a pure C# class (not struct — it is passed by reference across collections). All fields are `readonly` and initialized via constructor. There are no setters.
+
+**Buff-applied modifiers:** When an `IBuffEffect` adds a `StatModifier` (e.g. `SlowEffect`), `Source` **must be the `BuffInstance`**, not `BuffConfig`. `OnRemove` calls `RemoveModifiersFromSource(instance)`. Using `BuffConfig` as source breaks Independent stacking — removing one instance would remove all modifiers from that config.
+
+**Stack mode:** one modifier per instance; `Value = configBase × BuffInstance.StackCount`; on stack change, **remove + re-add** a new `StatModifier` (no in-place update — `StatModifier` is immutable).
+**Refresh mode:** do not add a new modifier; reset duration only.
+
+```csharp
+public class StatModifier
+{
+    public StatType StatType { get; }
+    public ModifierType ModifierType { get; }
+    public float Value { get; }
+    public object Source { get; }
+
+    public StatModifier(StatType statType, ModifierType modifierType, float value, object source) { ... }
+}
+```
+
+**Portfolio note:** `Source` is `object` for flexibility at demo scale. Buff-applied modifiers **must** use `BuffInstance` as source (see above). A marker interface (e.g. `IModifierSource`) would tighten removal semantics in production.
+
+## Serialization Attributes
+
+`[SerializeField]`, `[SerializeReference]`, and `[CreateAssetMenu]` belong only to `MonoBehaviour` and `ScriptableObject` subclasses. Do not add serialization attributes to pure C# classes.
+
+```csharp
+// Wrong
+public class CharacterStats
+{
+    [SerializeField] private float _baseAttack; // pure class — no serialization
+}
+
+// Correct
+public class PlayerConfig : ScriptableObject
+{
+    [SerializeField] private StatBaseEntry[] _statBases;
+    [SerializeField] private List<AbilitySlot> _abilitySlots;
+}
+```
+
+## ScriptableObjects
+
+Every `ScriptableObject` subclass must have a `[CreateAssetMenu]` attribute. Do not generate a ScriptableObject without it.
+
+```csharp
+[CreateAssetMenu(menuName = "AbilitySystem/AbilityConfig", fileName = "AbilityConfig")]
+public class AbilityConfig : ScriptableObject
+{
+    [SerializeField] private float _cooldownDuration;
+    [SerializeField] private BuffConfig _onCastBuff;
+
+    public float CooldownDuration => _cooldownDuration;
+    public BuffConfig OnCastBuff => _onCastBuff;
+}
+
+[CreateAssetMenu(menuName = "AbilitySystem/PlayerConfig", fileName = "PlayerConfig")]
+public class PlayerConfig : ScriptableObject
+{
+    [SerializeField] private StatBaseEntry[] _statBases;
+    [SerializeField] private List<AbilitySlot> _abilitySlots;
+
+    public IReadOnlyDictionary<StatType, float> GetBaseStats() { ... }
+    public IReadOnlyList<AbilitySlot> AbilitySlots => _abilitySlots;
+}
+```
+
+ScriptableObjects in this project are configuration assets only (`AbilityConfig`, `BuffConfig`, `PlayerConfig`, `EnemyConfig`). Do not store mutable runtime state inside a ScriptableObject field — a ScriptableObject asset is shared across all instances that reference it, so writing runtime state to it (e.g. current cooldown remaining, current buff stacks) corrupts state for every entity sharing that asset. Runtime state belongs in pure C# classes owned per-entity (`CooldownManager`, `BuffSystem`, `BuffInstance`).
+
+Do not use a ScriptableObject as a service locator, event channel, or singleton accessor in this project. `[SerializeReference] IAbility` instances on `AbilitySlot` are shared ability *implementations* — they must not cache or mutate per-entity runtime state (no `CooldownManager` in the constructor). Per-entity execution dependencies (`ICooldownQuery`, slot `Config`, `AbilityIndex`, `Random`) are passed through `AbilityContext` by `AbilitySystem`. Cooldown *state* lives in `CooldownManager`, not on the `IAbility` asset.
+
+`[SerializeReference] IBuffEffect` on `BuffConfig` follows the same rule: shared flyweight implementations must not hold per-entity runtime state. Stacks, duration, and instance-specific data live on `BuffInstance` only.
+
+`AbilityConfig.OnCastBuff` is an optional `BuffConfig` reference (assign a `BuffConfig` asset in the Inspector). Buff applies when `Execute` returns `Success`, not after a separate hit-confirm gate (including when pipeline damage is 0). Hit-type abilities (e.g. `DamageAbility`) call **`ApplyOnCastBuff(in ctx)`**; `AbilitySystem` must not apply it.
+
+## CharacterStats Formula
+
+`GetValue(StatType)` computes: `(base + sum(flat modifiers)) × product(1 + percent_i)`. Flat modifiers accumulate first; each Percent modifier multiplies independently. This formula is an invariant — do not reorder Flat/Percent phases.
+
+**MaxHP mutations and clamp:** All changes to effective MaxHP must go through `AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource`. When a mutation affects `StatType.MaxHP`, invoke registered `Action<StatType>` callbacks. `Damageable` registers at construction to call `ClampCurrentHPToMax()`. Do not call clamp only from `BuffSystem` — equipment/level-up paths must also use Stats API so callback fires.
+
+## CharacterStats Caching
+
+`CharacterStats.GetValue(StatType)` uses a **dirty-flag cache** invalidated on `AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource`. Do not recompute the full modifier list on every `GetValue` call in hot paths. This is separate from `Damageable.MaxHP`: `Damageable` must not cache MaxHP as its own field — it always reads `_stats.GetValue(StatType.MaxHP)`, which may return a cached value from `CharacterStats`.
+
+## MaxHP Source of Truth
+
+`CharacterStats` is the single source of truth for `MaxHP` (it's a stat, modifiable by buffs via `StatModifier`). `Damageable` (Character/) holds `CurrentHP` as a field, but exposes `MaxHP` as a read-only property that proxies `CharacterStats.GetValue(StatType.MaxHP)` on every access — it is never cached as a field on `Damageable`. This means `Damageable` takes a `CharacterStats` reference in its constructor (not a raw `float maxHP`), and `CharacterStats` must already be constructed when `Damageable` is constructed (see `architecture.mdc`, Dependency Injection).
+
+```csharp
+// Character/CharacterStats.cs
+public class CharacterStats
+{
+    public CharacterStats(IReadOnlyDictionary<StatType, float> baseValues) { ... }
+
+    public float GetValue(StatType type) { ... }
+    public void RegisterStatChangedCallback(Action<StatType> callback) { ... }
+    public void AddModifier(StatModifier modifier) { ... }   // MaxHP-affecting → invoke callback
+    public void RemoveModifier(StatModifier modifier) { ... }
+    public void RemoveModifiersFromSource(object source) { ... }
+}
+
+// Character/Damageable.cs — constructor:
+// stats.RegisterStatChangedCallback(st => { if (st == StatType.MaxHP) ClampCurrentHPToMax(); });
+public class Damageable
+{
+    public void ClampCurrentHPToMax() { ... }  // Min(CurrentHP, MaxHP); HpChangedEvent if changed
+    // ...
+}
+```
+
+UI may read MaxHP from `CharacterStats` or `Damageable.MaxHP` (always agree). Any MaxHP change via Stats API → callback → `ClampCurrentHPToMax()`.
+
+`TakeDamage()` throws `ArgumentOutOfRangeException` when `amount < 0`, subtracts damage, clamps `CurrentHP` to `>= 0`, then publishes `HpChangedEvent`; it does not publish `DamageEvent` (see `architecture.mdc`). `Heal()` throws on `amount < 0`, clamps to live `MaxHP`, publishes `HpChangedEvent` and `HealEvent`.
