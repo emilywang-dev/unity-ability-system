@@ -47,7 +47,7 @@ If asked to "make it more like GAS," extend README **GAS Comparison / What I'd D
 
 ## Event Placement
 
-Events are `readonly struct` types placed in the **lowest layer that has an `Events/` folder** and can reference all payload types without violating asmdef direction. When payload types alone point to an earlier layer but the event's semantic domain belongs elsewhere, place it in the semantic layer's `Events/` folder (e.g. `EntityDiedEvent` payload is only `ICombatEntity`, but death is a combat lifecycle event → `Combat/Events/`).
+Events are `readonly struct` types **implementing `IEvent`** placed in the **lowest layer that has an `Events/` folder** and can reference all payload types without violating asmdef direction. When payload types alone point to an earlier layer but the event's semantic domain belongs elsewhere, place it in the semantic layer's `Events/` folder (e.g. `EntityDiedEvent` payload is only `ICombatEntity`, but death is a combat lifecycle event → `Combat/Events/`).
 
 | Location | Events |
 |---|---|
@@ -222,7 +222,9 @@ void Update()
     _abilitySystem.Tick(dt);
     _stateMachine.Update();
     if (_stateMachine.CurrentState != _deadState && _damageable.CurrentHP <= 0f)
+    {
         _stateMachine.ChangeState(_deadState);
+    }
 }
 
 // Correct — Dead state publishes once on Enter
@@ -240,7 +242,9 @@ public class DashAbility : AbilityBase
     public override AbilityExecuteResult Execute(in AbilityContext ctx)
     {
         if (ctx.Caster is not Player player)
+        {
             return AbilityExecuteResult.Interrupted;
+        }
         // ... move player ...
         player.StateMachine.ChangeState(player.DashState);
         return AbilityExecuteResult.Success;
@@ -286,6 +290,8 @@ Two specific mistakes Cursor tends to make in this codebase, not already covered
 **Putting `CooldownManager` on `AbilityContext`.** Use `ICooldownQuery` only — abilities must not call `StartCooldown`.
 
 **Putting `DamageEvent` in Core/Events/.** Follow the Event Placement table above.
+
+**Omitting `IEvent` on event structs.** All gameplay event structs must implement `IEvent` so `IEventBus.Subscribe` / `Publish` generic constraints compile.
 
 **Using `UnityEngine.Random` in pure C# gameplay code.** Use `IRandomProvider` via `AbilityContext.Random`; inject a mock in tests.
 

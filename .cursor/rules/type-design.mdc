@@ -7,7 +7,7 @@ globs: Assets/Scripts/**/*.cs
 
 ## Event Types
 
-Event types should be immutable. Prefer `readonly struct`; a `class` is allowed only when the event needs polymorphism or carries a reference type that would box inside a struct. All current events in this project are simple, non-polymorphic data and must be `readonly struct`:
+Event types should be immutable. Prefer `readonly struct`; a `class` is allowed only when the event needs polymorphism or carries a reference type that would box inside a struct. All current events in this project are simple, non-polymorphic data and must be `readonly struct` **implementing `IEvent`** (`Core/Events/IEvent.cs`) so `IEventBus` generic methods are type-safe.
 
 | Event | Folder |
 |---|---|
@@ -19,7 +19,7 @@ Do not define event types anywhere else. Place each event per `architecture.mdc`
 
 ```csharp
 // Correct — Combat/Events/DamageEvent.cs
-public readonly struct DamageEvent
+public readonly struct DamageEvent : IEvent
 {
     public readonly float Amount;
     public readonly ICombatEntity Source;
@@ -213,7 +213,13 @@ public class CharacterStats
 }
 
 // Character/Damageable.cs — constructor:
-// stats.RegisterStatChangedCallback(st => { if (st == StatType.MaxHP) ClampCurrentHPToMax(); });
+// stats.RegisterStatChangedCallback(st =>
+// {
+//     if (st == StatType.MaxHP)
+//     {
+//         ClampCurrentHPToMax();
+//     }
+// });
 public class Damageable
 {
     public void ClampCurrentHPToMax() { ... }  // Min(CurrentHP, MaxHP); HpChangedEvent if changed

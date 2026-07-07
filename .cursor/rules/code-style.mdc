@@ -15,7 +15,7 @@ Each class should map to one of the architecture's named responsibilities (see `
 
 | Category | Convention | Example |
 |---|---|---|
-| Interfaces | `I` prefix, PascalCase | `IAbility`, `IBuffEffect`, `IBuffApplier`, `IDamageModifier`, `IRandomProvider`, `IAbilityTargetProvider`, `ICooldownQuery` |
+| Interfaces | `I` prefix, PascalCase | `IEvent`, `IAbility`, `IBuffEffect`, `IBuffApplier`, `IDamageModifier`, `IRandomProvider`, `IAbilityTargetProvider`, `ICooldownQuery`, `IEventBus` |
 | Abstract classes | `Base` suffix | `AbilityBase` |
 | ScriptableObject configs | `Config` suffix | `AbilityConfig`, `BuffConfig`, `PlayerConfig`, `EnemyConfig` |
 | MonoBehaviour adapters | No suffix | `Player`, `Enemy`, `GameManager` |
@@ -27,13 +27,46 @@ Each class should map to one of the architecture's named responsibilities (see `
 | Private fields | `_camelCase` with underscore prefix | `_currentHP`, `_handlers` |
 | Public properties | PascalCase | `CurrentHP`, `MaxHP` |
 
+## Formatting and C# Style
+
+Follow the conventions in `Core/Events/IEvent.cs`, `IEventBus.cs`, and `EventBus.cs`.
+
+**Braces and control flow**
+- Allman style: opening `{` on its own line.
+- Always use braces for `if` / `else`, even for single-line bodies.
+- Prefer early return for guard clauses and no-op paths instead of deep nesting.
+
+**File layout**
+- `using` directives at the top, blank line, then block-scoped `namespace` matching the layer folder (e.g. `Core.Events`).
+- One blank line between logical sections inside a type or method.
+- End each file with a single trailing newline.
+
+**Locals and initialization**
+- Use `var` when the type is obvious from the right-hand side.
+- Prefer target-typed `new()` for field/collection initialization (e.g. `new Dictionary<Type, Delegate>()`).
+
+**Null checks and exceptions**
+- Required arguments: `if (arg == null) { throw new ArgumentNullException(nameof(arg)); }`
+- Use `nameof(...)` in exception constructors.
+- Use pattern matching where it clarifies intent (e.g. `if (del is not Action<T> action)`).
+- Multi-line `throw` is allowed when the message is long; use `$"..."` interpolation for dynamic values, not `+` concatenation.
+
+**Documentation** (see also `documentation.mdc`)
+- Core public contracts (`IEvent`, `IEventBus`): XML docs on the interface.
+- Implementations mirroring an interface: `/// <inheritdoc/>` on public members.
+- Inline comments: only where a reader might assume a mistake; do not restate obvious code.
+
+**Types**
+- Concrete implementations not meant for extension: `public sealed class`.
+- Private fields: `_camelCase`; use `readonly` when the reference does not change after construction.
+
 ## Folder Structure
 
 ```
 Assets/
 ├── Scripts/
-│   ├── Core/                ← IEventBus, EventBus, IRandomProvider, StateMachine, IState
-│   │   └── Events/          ← HealEvent, HpChangedEvent, CooldownStartedEvent, CooldownEndedEvent
+│   ├── Core/                ← IRandomProvider, StateMachine, IState
+│   │   └── Events/          ← IEvent, IEventBus, EventBus, HealEvent, HpChangedEvent, CooldownStartedEvent, CooldownEndedEvent
 │   ├── Character/           ← CharacterStats, Damageable, ICombatEntity
 │   ├── Combat/
 │   │   └── Events/          ← DamageEvent, EntityDiedEvent (Victim field)

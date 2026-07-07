@@ -7,6 +7,8 @@ globs: Assets/Scripts/**/*.cs
 
 Do not generate XML doc comments (`/// <summary>`) unless explicitly requested. Public interface members should be self-explanatory from their names and signatures — `IDamageModifier.Modify(float damage, DamageContext ctx)` does not need a comment.
 
+**Exception — Core public contracts:** `IEvent`, `IEventBus`, and similar Core-layer API surfaces that define project-wide contracts may use full XML docs (`/// <summary>`, `<typeparam>`, `<exception>`, `<remarks>` as needed). Concrete implementations of those interfaces use `/// <inheritdoc/>` on matching public members instead of duplicating XML.
+
 ## When to Comment
 
 Add a short inline comment only where the code deviates from the obvious approach and an interviewer reading quickly might assume a mistake. The cases in this project:

@@ -42,7 +42,10 @@ public void Apply(BuffConfig config)
 // Correct — surfaces the bug immediately
 public void Apply(BuffConfig config, ICombatEntity instigator = null)
 {
-    if (config == null) throw new ArgumentNullException(nameof(config));
+    if (config == null)
+    {
+        throw new ArgumentNullException(nameof(config));
+    }
     // instigator may be null for self-applied buffs
 }
 ```
@@ -58,7 +61,9 @@ Validate numeric gameplay inputs at the API boundary where invalid values indica
 public void TakeDamage(float amount)
 {
     if (amount < 0f)
+    {
         throw new ArgumentOutOfRangeException(nameof(amount), amount, "Damage amount must be non-negative.");
+    }
     // subtract, clamp CurrentHP >= 0, publish HpChangedEvent
 }
 ```

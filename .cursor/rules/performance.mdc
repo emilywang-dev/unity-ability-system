@@ -27,7 +27,9 @@ var expired = _instances.Where(i => i.RemainingTime <= 0).ToList();
 for (int i = _instances.Count - 1; i >= 0; i--)
 {
     if (_instances[i].RemainingTime <= 0)
+    {
         _instances.RemoveAt(i);
+    }
 }
 ```
 
