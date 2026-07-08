@@ -52,7 +52,7 @@ Follow the conventions in `Core/Events/IEvent.cs`, `IEventBus.cs`, and `EventBus
 - Multi-line `throw` is allowed when the message is long; use `$"..."` interpolation for dynamic values, not `+` concatenation.
 
 **Documentation** (see also `documentation.mdc`)
-- Core public contracts (`IEvent`, `IEventBus`): XML docs on the interface.
+- Core public contracts (`IEvent`, `IEventBus`, `IState`, `StateMachine`): XML docs on the interface/class.
 - Implementations mirroring an interface: `/// <inheritdoc/>` on public members.
 - Inline comments: only where a reader might assume a mistake; do not restate obvious code.
 

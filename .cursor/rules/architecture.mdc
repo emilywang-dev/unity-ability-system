@@ -75,7 +75,7 @@ Each entity's MonoBehaviour `Update` must drive internal systems in this **fixed
 
 1. `BuffSystem.Tick(deltaTime)`
 2. `AbilitySystem.Tick(deltaTime)` (includes `CooldownManager.Tick`)
-3. `StateMachine.Update()`
+3. `StateMachine.Tick(deltaTime)`
 4. **Entity-level death check** — if `CurrentState != DeadState` and `Damageable.CurrentHP <= 0`, call `StateMachine.ChangeState(DeadState)` using the cached DeadState instance
 
 DoT (Burn) applies HP changes before the state machine updates; death is checked once in entity `Update` after step 3 — do not duplicate `CurrentHP <= 0` checks inside individual non-dead states.
@@ -194,12 +194,15 @@ There are two kinds of `IEventBus` instance in this project, and they are not in
 - **CanExecute purity:** `CanExecute` must be side-effect free — read-only checks via `ICooldownQuery` only.
 - **MaxHP clamp:** Any MaxHP change via `CharacterStats` triggers registered callback → `Damageable.ClampCurrentHPToMax()`. Non-MaxHP stat changes must not invoke the clamp callback.
 - **DeadState re-entry:** Entity `Update` death check requires `CurrentState != DeadState` before transitioning; `EntityDiedEvent` publishes only in `DeadState.Enter`.
+- **StateMachine constructor:** `StateMachine(owner, initialState)` invokes `initialState.Enter(owner)` immediately; `initialState` null → `ArgumentNullException`.
+- **ChangeState same instance:** `ChangeState(newState)` no-ops when `newState` is the same instance as `CurrentState` (no Exit/Enter).
+- **ChangeState reentrancy:** Reentrant `ChangeState` from within `Enter` or `Exit` is not supported — initiate transitions from `Tick` or external gameplay logic.
 
 ## StateMachine Transition Pattern
 
-This sample project uses Pull-style transitions by default: a state checks **state-specific** exit conditions inside `Update(owner)` and calls `owner.StateMachine.ChangeState(cachedState)` using **pre-allocated state instances** cached on `Player`/`Enemy` (see `performance.mdc`). Do not introduce Push-style transition tables unless explicitly requested.
+This sample project uses Pull-style transitions by default: a state checks **state-specific** exit conditions inside `Tick(owner, deltaTime)` and calls `owner.StateMachine.ChangeState(cachedState)` using **pre-allocated state instances** cached on `Player`/`Enemy` (see `performance.mdc`). Do not introduce Push-style transition tables unless explicitly requested.
 
-**Death is an any-state transition**, not duplicated in every non-dead state. After `StateMachine.Update()`, entity `Update` checks `CurrentState != DeadState && Damageable.CurrentHP <= 0` and transitions to cached `DeadState` once.
+**Death is an any-state transition**, not duplicated in every non-dead state. After `StateMachine.Tick(deltaTime)`, entity `Update` checks `CurrentState != DeadState && Damageable.CurrentHP <= 0` and transitions to cached `DeadState` once.
 
 There is one accepted Push-style exception: an external system reacting to a one-shot event may call `ChangeState` directly. `DashAbility` casts `ctx.Caster` to `Player` and calls `player.StateMachine.ChangeState(player.DashState)`.
 
@@ -209,18 +212,18 @@ There is one accepted Push-style exception: an external system reacting to a one
 // Correct — state-specific Pull transition; death handled in entity Update, not here
 public class EnemyChaseState : IState<Enemy>
 {
-    public void Update(Enemy owner)
+    public void Tick(Enemy owner, float deltaTime)
     {
         // chase / attack logic only
     }
 }
 
-// Correct — entity Update after StateMachine.Update()
+// Correct — entity Update after StateMachine.Tick(deltaTime)
 void Update()
 {
     _buffSystem.Tick(dt);
     _abilitySystem.Tick(dt);
-    _stateMachine.Update();
+    _stateMachine.Tick(dt);
     if (_stateMachine.CurrentState != _deadState && _damageable.CurrentHP <= 0f)
     {
         _stateMachine.ChangeState(_deadState);
@@ -260,6 +263,8 @@ stateMachine.AddTransition(idleState, deadState, () => hp <= 0);
 Two specific mistakes Cursor tends to make in this codebase, not already covered by the rules above:
 
 **StateMachine generic constraints.** `StateMachine<TOwner>` and `IState<TOwner>` use unconstrained generics. Do not add `where TOwner : class` or `where TOwner : MonoBehaviour` — `TOwner` can be any type, and adding a constraint here doesn't match the actual design intent.
+
+**Using `Update` on `IState` or `StateMachine`.** Per-frame advancement is **`IState.Tick(TOwner owner, float deltaTime)`** and **`StateMachine.Tick(float deltaTime)`** — not `Update`. Entity `MonoBehaviour.Update` drives the tick chain and passes `deltaTime` through.
 
 **Initialize() instead of constructor injection.** Cursor may generate `public void Initialize(Dependency dep)` methods as a substitute for constructor parameters on pure C# classes. Use this pattern only when Unity itself constructs the object (`MonoBehaviour`, `ScriptableObject`) and a constructor isn't available. Every pure C# class in this project takes its dependencies through the constructor.
 

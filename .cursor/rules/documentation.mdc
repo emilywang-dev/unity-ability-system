@@ -7,7 +7,7 @@ globs: Assets/Scripts/**/*.cs
 
 Do not generate XML doc comments (`/// <summary>`) unless explicitly requested. Public interface members should be self-explanatory from their names and signatures — `IDamageModifier.Modify(float damage, DamageContext ctx)` does not need a comment.
 
-**Exception — Core public contracts:** `IEvent`, `IEventBus`, and similar Core-layer API surfaces that define project-wide contracts may use full XML docs (`/// <summary>`, `<typeparam>`, `<exception>`, `<remarks>` as needed). Concrete implementations of those interfaces use `/// <inheritdoc/>` on matching public members instead of duplicating XML.
+**Exception — Core public contracts:** `IEvent`, `IEventBus`, `IState`, `StateMachine`, and similar Core-layer API surfaces that define project-wide contracts may use full XML docs (`/// <summary>`, `<typeparam>`, `<exception>`, `<remarks>` as needed). Concrete implementations of those interfaces use `/// <inheritdoc/>` on matching public members instead of duplicating XML.
 
 ## When to Comment
 
@@ -34,7 +34,8 @@ Add a short inline comment only where the code deviates from the obvious approac
 - Entity init: all pure C# systems built in `InjectSharedServices` → `ConstructGameplaySystems()`; not in `Player`/`Enemy` `Awake`.
 - `SlowEffect` passes `BuffInstance` as `StatModifier.Source`, not `BuffConfig` — required for Independent stack removal. Stack mode: `Value = base × StackCount`.
 - `DefenseModifier` uses multiplicative reduction `damage × 100 / (100 + Defense)` — not subtractive armor. `DamageType.True` skips Defense only; Crit still applies.
-- Entity tick order: `BuffSystem.Tick` → `AbilitySystem.Tick` → `StateMachine.Update` → entity any-state death check — DoT before death; death not duplicated per state.
+- Entity tick order: `BuffSystem.Tick` → `AbilitySystem.Tick` → `StateMachine.Tick(deltaTime)` → entity any-state death check — DoT before death; death not duplicated per state.
+- `StateMachine` constructor calls `Enter` on `initialState` immediately; `ChangeState` same-instance is no-op; reentrant `ChangeState` from `Enter`/`Exit` is not supported.
 - `EventBus.Publish` must not allocate — combined delegate, no `GetInvocationList()`.
 
 ```csharp
