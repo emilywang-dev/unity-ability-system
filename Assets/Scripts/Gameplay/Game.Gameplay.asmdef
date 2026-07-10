@@ -1,9 +1,8 @@
 {
-    "name": "Game.Buff",
+    "name": "Game.Gameplay",
     "rootNamespace": "",
     "references": [
-        "GUID:582f98455f5be374b9c37c09979c9f59",
-        "GUID:20abc8317e31e9048bbe879013e72fb0"
+        "GUID:582f98455f5be374b9c37c09979c9f59"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
