@@ -15,15 +15,15 @@ Each class should map to one of the architecture's named responsibilities (see `
 
 | Category | Convention | Example |
 |---|---|---|
-| Interfaces | `I` prefix, PascalCase | `IEvent`, `IAbility`, `IBuffEffect`, `IBuffApplier`, `IDamageModifier`, `IRandomProvider`, `IAbilityTargetProvider`, `ICooldownQuery`, `IEventBus` |
+| Interfaces | `I` prefix, PascalCase | `IEvent`, `IAbility`, `IBuffEffect`, `IBuffApplier`, `IDamageModifier`, `IRandomProvider`, `IAbilityTargetProvider`, `ICooldownQuery`, `IEventBus`, `IReadOnlyStatCollection` |
 | Abstract classes | `Base` suffix | `AbilityBase` |
 | ScriptableObject configs | `Config` suffix | `AbilityConfig`, `BuffConfig`, `PlayerConfig`, `EnemyConfig` |
 | MonoBehaviour adapters | No suffix | `Player`, `Enemy`, `GameManager` |
-| Event structs | `Event` suffix | `DamageEvent`, `BuffAppliedEvent`, `EntityDiedEvent` |
+| Event structs | `Event` suffix | `DamageEvent`, `BuffAppliedEvent`, `EntityDiedEvent`, `StatChangedEvent` |
 | Context types | `Context` suffix, both `readonly struct` (see `type-design.mdc`) | `DamageContext`, `AbilityContext` |
 | Dependency bundles | `Deps` suffix, `readonly struct` | `AbilityTargetDeps` |
 | Slot types | `Slot` suffix | `AbilitySlot` |
-| Enums | PascalCase, no suffix | `StatType`, `DamageType`, `ModifierType`, `AbilityExecuteResult`, `TryExecuteResult` |
+| Enums | PascalCase, no suffix | `StatType`, `StatModifierType`, `DamageType`, `AbilityExecuteResult`, `TryExecuteResult` |
 | Private fields | `_camelCase` with underscore prefix | `_currentHP`, `_handlers` |
 | Public properties | PascalCase | `CurrentHP`, `MaxHP` |
 
@@ -37,7 +37,7 @@ Follow the conventions in `Core/Events/IEvent.cs`, `IEventBus.cs`, and `EventBus
 - Prefer early return for guard clauses and no-op paths instead of deep nesting.
 
 **File layout**
-- `using` directives at the top, blank line, then block-scoped `namespace` matching the layer folder (e.g. `Core.Events`).
+- `using` directives at the top, blank line, then block-scoped `namespace` matching the layer folder (e.g. `Core.Events`, `Gameplay.Stats`).
 - One blank line between logical sections inside a type or method.
 - End each file with a single trailing newline.
 
@@ -50,11 +50,9 @@ Follow the conventions in `Core/Events/IEvent.cs`, `IEventBus.cs`, and `EventBus
 - Use `nameof(...)` in exception constructors.
 - Use pattern matching where it clarifies intent (e.g. `if (del is not Action<T> action)`).
 - Multi-line `throw` is allowed when the message is long; use `$"..."` interpolation for dynamic values, not `+` concatenation.
+- See `error-handling.mdc` for fail-fast categories and Stats validation.
 
-**Documentation** (see also `documentation.mdc`)
-- Core public contracts (`IEvent`, `IEventBus`, `IState`, `StateMachine`): XML docs on the interface/class.
-- Implementations mirroring an interface: `/// <inheritdoc/>` on public members.
-- Inline comments: only where a reader might assume a mistake; do not restate obvious code.
+**Documentation** — see `documentation.mdc` (single source of truth for XML / inline comment tiers). Do not restate those rules here.
 
 **Types**
 - Concrete implementations not meant for extension: `public sealed class`.
@@ -62,17 +60,20 @@ Follow the conventions in `Core/Events/IEvent.cs`, `IEventBus.cs`, and `EventBus
 
 ## Folder Structure
 
+Four gameplay layers under `Scripts/` (former Character / Combat / Buff folders are merged into **Gameplay/**):
+
 ```
 Assets/
 ├── Scripts/
 │   ├── Core/                ← IRandomProvider, StateMachine, IState
-│   │   └── Events/          ← IEvent, IEventBus, EventBus, HealEvent, HpChangedEvent, CooldownStartedEvent, CooldownEndedEvent
-│   ├── Character/           ← CharacterStats, Damageable, ICombatEntity
-│   ├── Combat/
-│   │   └── Events/          ← DamageEvent, EntityDiedEvent (Victim field)
-│   ├── Ability/             ← AbilitySystem, AbilityTargetDeps, AbilitySlot, ICooldownQuery, IAbilityTargetProvider, DamageAbility, HealAbility, CooldownManager
-│   ├── Buff/                ← IBuffApplier, BuffSystem, IBuffEffect, BuffConfig
-│   │   └── Events/          ← BuffAppliedEvent, BuffRemovedEvent
+│   │   └── Events/          ← IEvent, IEventBus, EventBus only (no gameplay event structs)
+│   ├── Gameplay/            ← shared gameplay (stats, damageable, combat, buffs, …)
+│   │   ├── Events/          ← HpChangedEvent, HealEvent, DamageEvent, EntityDiedEvent, BuffAppliedEvent, BuffRemovedEvent
+│   │   ├── Stats/           ← StatCollection, Stat, StatModifier, IReadOnlyStatCollection, StatType, StatModifierType
+│   │   │   └── Events/      ← StatChangedEvent
+│   │   └── …                ← Damageable, ICombatEntity, DamagePipeline, BuffSystem, …
+│   ├── Ability/             ← AbilitySystem, AbilityTargetDeps, AbilitySlot, ICooldownQuery, IAbilityTargetProvider, DamageAbility, HealAbility, CooldownManager, AbilityConfig
+│   │   └── Events/          ← CooldownStartedEvent, CooldownEndedEvent
 │   └── Demo/                ← DashAbility, UnityRandomProvider, Player, Enemy, GameManager, PlayerInputHandler, EnemyAI, PlayerConfig, EnemyConfig, states, HUD
 ├── Tests/
 ├── Materials/
@@ -80,22 +81,22 @@ Assets/
     └── Demo.unity
 ```
 
-Do not place types in the wrong layer folder (e.g. a Combat type under Core/). Do not create speculative empty subfolders.
+Do not place types in the wrong layer folder (e.g. a Gameplay type under Core/). Do not recreate `Character/`, `Combat/`, or `Buff/` as top-level Script folders. Do not create speculative empty subfolders.
 
-**Config ScriptableObject placement:** `AbilityConfig` and `BuffConfig` live in Ability/ and Buff/ respectively. `PlayerConfig` and `EnemyConfig` live in **Demo/** — they hold **`StatBaseEntry[]`** (for `CharacterStats` bases) + **`List<AbilitySlot>`** and may serialize Demo-layer `[SerializeReference] IAbility` implementations (e.g. `DashAbility`).
+**Config ScriptableObject placement:** `AbilityConfig` lives in **Ability/**. `BuffConfig` lives in **Gameplay/** (with buff types). `PlayerConfig` and `EnemyConfig` live in **Demo/** — they hold base-stat data used to call `StatCollection.SetBaseStat` at entity init, plus **`List<AbilitySlot>`**, and may serialize Demo-layer `[SerializeReference] IAbility` implementations (e.g. `DashAbility`).
 
 ## Assembly Definitions
 
-Each folder under `Scripts/` has its own `.asmdef` file. Names follow the pattern `Game.<LayerName>`:
+Each folder under `Scripts/` has its own `.asmdef`. Names follow `Game.<LayerName>`:
 
 | Folder | Assembly name | References |
 |---|---|---|
 | Core/ | `Game.Core` | (none) |
-| Character/ | `Game.Character` | Core |
-| Combat/ | `Game.Combat` | Core, Character |
-| Ability/ | `Game.Ability` | Core, Combat, Character, Buff |
-| Buff/ | `Game.Buff` | Core, Character |
-| Demo/ | `Game.Demo` | all layers |
-| Tests/ | `Game.Tests` | all gameplay layers (not Demo) |
+| Gameplay/ | `Game.Gameplay` | Core |
+| Ability/ | `Game.Ability` | Core, Gameplay |
+| Demo/ | `Game.Demo` | Core, Gameplay, Ability |
+| Tests/ | `Game.Tests` | Core, Gameplay, Ability (not Demo); Editor-only test refs |
+
+Dependency direction is one-way downward: **Core ← Gameplay ← Ability ← Demo**. Do not introduce reverse references.
 
 Do not place code from one assembly into another assembly's folder. Do not create new `.asmdef` files without a concrete dependency-isolation reason (a future `Game.Editor` for editor-only tooling would qualify). Update this table if you do.

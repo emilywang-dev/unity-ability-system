@@ -5,38 +5,48 @@ globs: Assets/Scripts/**/*.cs
 
 # Documentation Rules
 
-Do not generate XML doc comments (`/// <summary>`) unless explicitly requested. Public interface members should be self-explanatory from their names and signatures — `IDamageModifier.Modify(float damage, DamageContext ctx)` does not need a comment.
+Default: do **not** generate **member-level** XML doc comments (`/// <summary>`) unless Tier 1/2 applies, or the user explicitly asks. Prefer names and signatures that are self-explanatory — `IDamageModifier.Modify(float damage, DamageContext ctx)` needs no member comment. Every **public type** still needs the Tier 3 one-line summary (see below).
 
-**Exception — Core public contracts:** `IEvent`, `IEventBus`, `IState`, `StateMachine`, and similar Core-layer API surfaces that define project-wide contracts may use full XML docs (`/// <summary>`, `<typeparam>`, `<exception>`, `<remarks>` as needed). Concrete implementations of those interfaces use `/// <inheritdoc/>` on matching public members instead of duplicating XML.
+Explain **why**, not **what**, for member-level docs and inline comments. Do not restate the next line of code in a comment. (Type-level summaries under Tier 3 below are a narrow, explicitly-scoped exception — see there.)
 
-## When to Comment
+## When XML docs are allowed (three tiers)
 
-Add a short inline comment only where the code deviates from the obvious approach and an interviewer reading quickly might assume a mistake. The cases in this project:
+Judge by **role**, not by a fixed class-name whitelist. Examples below are illustrative.
 
-- `DamageContext` is a `readonly struct` that holds `ICombatEntity` interface references — note that this does not box (see `type-design.mdc`).
-- `Damageable.MaxHP` live proxy; **any MaxHP change via `CharacterStats` API** → `RegisterStatChangedCallback` → `ClampCurrentHPToMax()` (not BuffSystem-only); non-MaxHP stat changes do not trigger clamp.
-- `Damageable.TakeDamage` / `Heal` reject `amount < 0` with `ArgumentOutOfRangeException`.
-- `Damageable.TakeDamage` does not publish `DamageEvent` — `DamagePipeline.Execute` publishes it after applying damage (see `architecture.mdc`). DoT bypasses Pipeline; only `HpChangedEvent`.
-- `EntityDiedEvent` on global bus only; `Victim` field is the dead entity, not attacker.
-- On-cast buff: **`ApplyOnCastBuff`** → `TargetBuffApplier.Apply(config, ctx.Caster)` on `Execute` → `Success`; not after hit confirm; 0 damage still applies buff if `Success`.
-- Damage abilities **must** call **`RollCrit(in ctx)`** before Pipeline — never `UnityEngine.Random`.
-- `AbilitySystem.TryExecute` returns **`TryExecuteResult`**; `IAbility.Execute` returns **`AbilityExecuteResult`** — two enums; `OnCooldown` only on `TryExecuteResult`.
-- `AbilitySystem.TryExecute` takes `AbilityTargetDeps`, not separate target/bus/applier parameters — build via `IAbilityTargetProvider.ToAbilityTarget()`. Self-target abilities pass caster's own deps.
-- `AbilityContext` uses `ICooldownQuery`, not `CooldownManager` — abilities cannot start cooldown; `AbilitySystem` does after `Success`.
-- Shared `DamagePipeline` — one GameManager instance for all entities; no per-attacker outgoing modifiers in demo.
-- Cooldown HUD fill is **pulled** via `ICooldownQuery.GetNormalized` in `Update`; `CooldownStartedEvent`/`CooldownEndedEvent` are discrete UI transitions only.
-- HUD local bus: **`Start`** → `_player.ToAbilityTarget().EventBus` (no separate `LocalEventBus` on Player); cooldown via `_player.AbilitySystem.CooldownQuery`.
-- HUD components store **`IEventBus`**, not concrete `EventBus`.
-- Per-entity local EventBus implies events lack Target field — portfolio tradeoff for 1v1; scaling needs explicit Target on events or central aggregator.
-- `CharacterStats.GetValue` uses dirty-flag caching — `Damageable.MaxHP` still proxies `GetValue` on every access; only the Stats layer caches, not Damageable (see `type-design.mdc`).
-- `CharacterStats(IReadOnlyDictionary<StatType, float> baseValues)` — base values from `PlayerConfig`/`EnemyConfig.GetBaseStats()` at entity init; modifiers added via API.
-- `GlobalEventBus` on Player/Enemy — injected by `GameManager.InjectSharedServices`; DeadState publishes `EntityDiedEvent` there only.
-- Entity init: all pure C# systems built in `InjectSharedServices` → `ConstructGameplaySystems()`; not in `Player`/`Enemy` `Awake`.
-- `SlowEffect` passes `BuffInstance` as `StatModifier.Source`, not `BuffConfig` — required for Independent stack removal. Stack mode: `Value = base × StackCount`.
-- `DefenseModifier` uses multiplicative reduction `damage × 100 / (100 + Defense)` — not subtractive armor. `DamageType.True` skips Defense only; Crit still applies.
-- Entity tick order: `BuffSystem.Tick` → `AbilitySystem.Tick` → `StateMachine.Tick(deltaTime)` → entity any-state death check — DoT before death; death not duplicated per state.
-- `StateMachine` constructor calls `Enter` on `initialState` immediately; `ChangeState` same-instance is no-op; reentrant `ChangeState` from `Enter`/`Exit` is not supported.
-- `EventBus.Publish` must not allocate — combined delegate, no `GetInvocationList()`.
+### Tier 1 — Project-wide contracts
+
+Cross-cutting APIs that define how layers talk to each other (typically Core, but not limited to the Core folder). Full XML is appropriate: `/// <summary>`, `<typeparam>`, `<exception>`, `<remarks>` as needed.
+
+Examples: `IEvent`, `IEventBus`, `IState`, `StateMachine`, `IReadOnlyStatCollection`.
+
+Concrete types that only implement a Tier-1 interface: use `/// <inheritdoc/>` on matching public members instead of duplicating docs.
+
+### Tier 2 — Cross-assembly APIs with non-obvious contracts
+
+Public types/methods consumed across asmdef boundaries whose **preconditions or thrown exceptions are not obvious from the signature** (especially state-dependent `InvalidOperationException`). Document with a short `/// <summary>` plus `<exception>` tags. Add a class-level `<remarks>` only when the type carries cross-cutting invariants (e.g. “must initialize before mutate”).
+
+Do **not** require full Tier-1 docs (`<typeparam>` tours, long remarks) here.
+
+Examples: `StatCollection.AddModifier` / `GetValue` (uninitialized stat → `InvalidOperationException`); `Damageable.TakeDamage` (negative amount → `ArgumentOutOfRangeException`) when that rejection is part of the public contract.
+
+Usually **omit** documenting every `ArgumentNullException` / obvious range check — the signature and fail-fast guards already communicate those. Prefer documenting exceptions that encode **usage protocol** (call A before B, or else throw).
+
+### Tier 3 — Everything else
+
+Members: no XML. Self-explanatory public members and internal helpers stay uncommented.
+
+Types: every **public** class/interface/struct/enum still gets at least one `/// <summary>` line, even when none of its members qualify for Tier 1/2 and would otherwise get zero documentation. This is a portfolio/reviewer-legibility floor, not a contract-documentation tier — it exists so opening `StatType.cs` or `StatModifierType.cs` cold gives an immediate sense of the type's role, without implying its members carry any usage protocol worth documenting. Tier 3 is a **floor**, not a ceiling: if the type later carries cross-cutting invariants, add `<remarks>` under Tier 2 rules.
+
+This one line is the **only** place a slight lean toward "what" is acceptable — naming the type's role or boundary (e.g. "Additive or Percent contribution applied to a Stat's raw value" for `StatModifierType`) is fine, since a type has no "next line of code" to restate. It must not:
+- restate the type name (`StatType` → ~~"Represents a stat type"~~)
+- turn into a members list or usage tutorial
+- migrate down onto members — a member with no Tier 1/2 justification still gets nothing, regardless of how well-documented its parent type is
+
+`internal` types may skip this line entirely. If an internal type sits at a place a reader might reasonably expect public visibility (e.g. `StatValueValidation`), replace the summary with a one-line reason it's internal instead (e.g. `// Internal validation helpers; not part of the public Stats API surface.`).
+
+## Inline comments
+
+Add a **one-line** inline comment only where the code deliberately differs from the obvious approach and a fast reader might assume a bug. Multi-fact architecture decisions belong in `architecture.mdc` / local `ARCHITECTURE_Detailed.md`, not pasted into source.
 
 ```csharp
 // Correct — one line, explains the non-obvious part
@@ -46,3 +56,5 @@ public void OnTick(BuffInstance instance, ICombatEntity target, float deltaTime)
     target.Damageable.TakeDamage(instance.Config.DamagePerSecond * deltaTime);
 }
 ```
+
+Wrong: multi-sentence “architecture essays” above a method, or comments that only narrate what the code already says.

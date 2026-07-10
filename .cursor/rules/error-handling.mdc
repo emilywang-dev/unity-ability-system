@@ -13,16 +13,14 @@ Validate required constructor arguments and throw immediately if they are invali
 
 ```csharp
 // Wrong — null dependency surfaces as a confusing NullReferenceException later
-public Damageable(CharacterStats stats, IEventBus eventBus)
+public StatCollection(IEventBus eventBus)
 {
-    _stats = stats;
     _eventBus = eventBus; // could be null, failure deferred
 }
 
 // Correct — fail at the point of construction, with a clear message
-public Damageable(CharacterStats stats, IEventBus eventBus)
+public StatCollection(IEventBus eventBus)
 {
-    _stats = stats ?? throw new ArgumentNullException(nameof(stats));
     _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
 }
 ```
@@ -31,28 +29,36 @@ public Damageable(CharacterStats stats, IEventBus eventBus)
 
 Prefer failing immediately and loudly during initialization over continuing in a known-bad state. Do not write code that silently no-ops on invalid input when the caller should be told something is wrong.
 
+Three cases — do not conflate them:
+
+| Case | Behavior |
+|---|---|
+| Required dependency / argument the caller controls | Throw (`ArgumentNullException`, `ArgumentOutOfRangeException`, `InvalidOperationException`) |
+| Optional parameter that is **semantically allowed to be null** (e.g. self-applied buff `instigator`) | Do **not** throw; null is a valid value |
+| Expected gameplay runtime state (e.g. ability on cooldown) | Return a result enum / `false` — not an exception |
+
 ```csharp
-// Wrong — hides a real bug (caller passed a null config)
+// Wrong — hides a real bug (caller passed a null required config)
 public void Apply(BuffConfig config)
 {
     if (config == null) return;
     // ...
 }
 
-// Correct — surfaces the bug immediately
+// Correct — required argument fails fast
 public void Apply(BuffConfig config, ICombatEntity instigator = null)
 {
     if (config == null)
     {
         throw new ArgumentNullException(nameof(config));
     }
-    // instigator may be null for self-applied buffs
+    // instigator may be null for self-applied buffs — optional, not covered by fail-fast
 }
 ```
 
-This applies to required dependencies and arguments the caller controls. It does not apply to expected runtime conditions that are part of normal gameplay flow — e.g. `IAbility.CanExecute` returning `false` because `ctx.CooldownQuery.IsOnCooldown(ctx.AbilityIndex)` is true is not an error; `AbilitySystem.TryExecute` returns `TryExecuteResult.OnCooldown` without calling `Execute`.
+Cooldown is the third case: `IAbility.CanExecute` returning `false` because `ctx.CooldownQuery.IsOnCooldown(ctx.AbilityIndex)` is true is not an error; `AbilitySystem.TryExecute` returns `TryExecuteResult.OnCooldown` without calling `Execute`.
 
-## Numeric Argument Validation
+## Numeric and Protocol Validation
 
 Validate numeric gameplay inputs at the API boundary where invalid values indicate a caller bug:
 
@@ -72,7 +78,11 @@ public void TakeDamage(float amount)
 
 `AbilitySystem.TryExecute` must throw `ArgumentOutOfRangeException` when `abilityIndex` is out of range — do not return a reserved `TryExecuteResult` value for caller bugs.
 
-`CharacterStats` constructor must reject null or empty `baseValues` (`ArgumentNullException` / `ArgumentException`).
+**Stats (`StatCollection`)** — init is explicit, not a constructor dictionary dump:
+
+- Constructor: reject null `IEventBus` only.
+- `SetBaseStat` / `StatModifier` construction: reject `StatType.None` and non-finite floats via `StatValueValidation` (`ArgumentOutOfRangeException`).
+- `GetValue` / `AddModifier` on an uninitialized stat: throw `InvalidOperationException` (usage protocol — call `SetBaseStat` first). Prefer `TryGetValue` when absence is a normal query.
 
 ## Assertions vs Exceptions
 

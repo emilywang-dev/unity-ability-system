@@ -11,14 +11,15 @@ Event types should be immutable. Prefer `readonly struct`; a `class` is allowed 
 
 | Event | Folder |
 |---|---|
-| `HealEvent`, `HpChangedEvent`, `CooldownStartedEvent`, `CooldownEndedEvent` | `Core/Events/` |
-| `DamageEvent`, `EntityDiedEvent` | `Combat/Events/` |
-| `BuffAppliedEvent`, `BuffRemovedEvent` | `Buff/Events/` |
+| (bus only: `IEvent`, `IEventBus`, `EventBus`) | `Core/Events/` |
+| `HpChangedEvent`, `HealEvent`, `DamageEvent`, `EntityDiedEvent`, `BuffAppliedEvent`, `BuffRemovedEvent` | `Gameplay/Events/` |
+| `StatChangedEvent` | `Gameplay/Stats/Events/` |
+| `CooldownStartedEvent`, `CooldownEndedEvent` | `Ability/Events/` |
 
-Do not define event types anywhere else. Place each event per `architecture.mdc`, Event Placement (lowest layer with an `Events/` folder; semantic domain when payload alone is ambiguous).
+Do not define gameplay event structs in `Core/`. Place each event per `architecture.mdc`, Event Placement. Death event name is **`EntityDiedEvent`** (not `EnemyDiedEvent`).
 
 ```csharp
-// Correct — Combat/Events/DamageEvent.cs
+// Correct — Gameplay/Events/DamageEvent.cs
 public readonly struct DamageEvent : IEvent
 {
     public readonly float Amount;
@@ -119,14 +120,14 @@ Do not introduce `record` types for context or event types in this project — s
 **Refresh mode:** do not add a new modifier; reset duration only.
 
 ```csharp
-public class StatModifier
+public sealed class StatModifier
 {
     public StatType StatType { get; }
-    public ModifierType ModifierType { get; }
+    public StatModifierType ModifierType { get; }
     public float Value { get; }
     public object Source { get; }
 
-    public StatModifier(StatType statType, ModifierType modifierType, float value, object source) { ... }
+    public StatModifier(StatType statType, StatModifierType modifierType, float value, object source) { ... }
 }
 ```
 
@@ -138,7 +139,7 @@ public class StatModifier
 
 ```csharp
 // Wrong
-public class CharacterStats
+public class StatCollection
 {
     [SerializeField] private float _baseAttack; // pure class — no serialization
 }
@@ -185,37 +186,40 @@ Do not use a ScriptableObject as a service locator, event channel, or singleton 
 
 `AbilityConfig.OnCastBuff` is an optional `BuffConfig` reference (assign a `BuffConfig` asset in the Inspector). Buff applies when `Execute` returns `Success`, not after a separate hit-confirm gate (including when pipeline damage is 0). Hit-type abilities (e.g. `DamageAbility`) call **`ApplyOnCastBuff(in ctx)`**; `AbilitySystem` must not apply it.
 
-## CharacterStats Formula
+## StatCollection Formula
 
-`GetValue(StatType)` computes: `(base + sum(flat modifiers)) × product(1 + percent_i)`. Flat modifiers accumulate first; each Percent modifier multiplies independently. This formula is an invariant — do not reorder Flat/Percent phases.
+`Stat.GetRawValue()` / `StatCollection.GetValue(StatType)` compute: `(base + Σ Additive) × (1 + Σ Percent)`. Additive modifiers accumulate first; Percent modifiers **sum into one multiplier** (not chained as `(1+p1)×(1+p2)`). Example: base=100, +50 Additive, +10% and +20% → `(100+50) × 1.3 = 195`. This formula is an invariant — do not reorder Additive/Percent phases or switch to product-of-percents.
 
-**MaxHP mutations and clamp:** All changes to effective MaxHP must go through `AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource`. When a mutation affects `StatType.MaxHP`, invoke registered `Action<StatType>` callbacks. `Damageable` registers at construction to call `ClampCurrentHPToMax()`. Do not call clamp only from `BuffSystem` — equipment/level-up paths must also use Stats API so callback fires.
+`StatCollection.GetValue` then applies per-stat clamps: `MaxHealth` / `MoveSpeed` ≥ 0; `CritChance` ∈ [0, 1]; `AttackPower` / `Defense` / `CritDamage` stay unclamped (debuffs may go negative).
 
-## CharacterStats Caching
+**MaxHealth mutations and clamp:** Prefer mutating effective MaxHealth via `AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource` (or `SetBaseStat` when intentionally changing base). `StatCollection` publishes `StatChangedEvent` on the local `IEventBus` when the **clamped** resolved value changes. `Damageable` subscribes and, when `StatType == MaxHealth`, calls `ClampCurrentHPToMax()`. Do not call clamp only from `BuffSystem` — any path that changes MaxHealth through Stats must publish so the subscription fires.
 
-`CharacterStats.GetValue(StatType)` uses a **dirty-flag cache** invalidated on `AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource`. Do not recompute the full modifier list on every `GetValue` call in hot paths. This is separate from `Damageable.MaxHP`: `Damageable` must not cache MaxHP as its own field — it always reads `_stats.GetValue(StatType.MaxHP)`, which may return a cached value from `CharacterStats`.
+## Stat Caching
 
-## MaxHP Source of Truth
+`Stat.GetRawValue()` uses a **dirty-flag cache** invalidated on `SetBaseValue` / `AddModifier` / `RemoveModifier` / `RemoveModifiersFromSource`. Do not recompute the full modifier list on every read in hot paths. This is separate from `Damageable.MaxHP`: `Damageable` must not cache MaxHP as its own field — it always reads `_stats.GetValue(StatType.MaxHealth)`, which may return a value backed by `Stat`'s cache then clamped by `StatCollection`.
 
-`CharacterStats` is the single source of truth for `MaxHP` (it's a stat, modifiable by buffs via `StatModifier`). `Damageable` (Character/) holds `CurrentHP` as a field, but exposes `MaxHP` as a read-only property that proxies `CharacterStats.GetValue(StatType.MaxHP)` on every access — it is never cached as a field on `Damageable`. This means `Damageable` takes a `CharacterStats` reference in its constructor (not a raw `float maxHP`), and `CharacterStats` must already be constructed when `Damageable` is constructed (see `architecture.mdc`, Dependency Injection).
+## MaxHealth Source of Truth
+
+`StatCollection` is the single source of truth for `MaxHealth` (modifiable by buffs via `StatModifier`). `Damageable` (Gameplay/) holds `CurrentHP` as a field, but exposes `MaxHP` as a read-only property that proxies `StatCollection.GetValue(StatType.MaxHealth)` on every access — it is never cached as a field on `Damageable`. Construct local `EventBus` + `StatCollection(eventBus)`, call `SetBaseStat` for required stats (including `MaxHealth`), then construct `Damageable` with the stats reference and subscribe to `StatChangedEvent` (entity init order: `ARCHITECTURE_Detailed.md`; MaxHP / event rules: `architecture.mdc`).
 
 ```csharp
-// Character/CharacterStats.cs
-public class CharacterStats
+// Gameplay/Stats/StatCollection.cs
+public sealed class StatCollection : IReadOnlyStatCollection
 {
-    public CharacterStats(IReadOnlyDictionary<StatType, float> baseValues) { ... }
+    public StatCollection(IEventBus eventBus) { ... }
 
+    public void SetBaseStat(StatType statType, float baseValue) { ... }
     public float GetValue(StatType type) { ... }
-    public void RegisterStatChangedCallback(Action<StatType> callback) { ... }
-    public void AddModifier(StatModifier modifier) { ... }   // MaxHP-affecting → invoke callback
-    public void RemoveModifier(StatModifier modifier) { ... }
+    public bool TryGetValue(StatType type, out float value) { ... }
+    public void AddModifier(StatModifier modifier) { ... }   // may publish StatChangedEvent
+    public bool RemoveModifier(StatModifier modifier) { ... }
     public void RemoveModifiersFromSource(object source) { ... }
 }
 
-// Character/Damageable.cs — constructor:
-// stats.RegisterStatChangedCallback(st =>
+// Gameplay/Damageable.cs — constructor:
+// eventBus.Subscribe<StatChangedEvent>(e =>
 // {
-//     if (st == StatType.MaxHP)
+//     if (e.StatType == StatType.MaxHealth)
 //     {
 //         ClampCurrentHPToMax();
 //     }
@@ -227,6 +231,6 @@ public class Damageable
 }
 ```
 
-UI may read MaxHP from `CharacterStats` or `Damageable.MaxHP` (always agree). Any MaxHP change via Stats API → callback → `ClampCurrentHPToMax()`.
+UI may read MaxHealth from `StatCollection` or `Damageable.MaxHP` (always agree). Any MaxHealth change via Stats API that changes the resolved value → `StatChangedEvent` → `ClampCurrentHPToMax()`.
 
 `TakeDamage()` throws `ArgumentOutOfRangeException` when `amount < 0`, subtracts damage, clamps `CurrentHP` to `>= 0`, then publishes `HpChangedEvent`; it does not publish `DamageEvent` (see `architecture.mdc`). `Heal()` throws on `amount < 0`, clamps to live `MaxHP`, publishes `HpChangedEvent` and `HealEvent`.
