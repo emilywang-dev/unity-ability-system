@@ -24,8 +24,8 @@ Each class should map to one of the architecture's named responsibilities (see `
 | Dependency bundles | `Deps` suffix, `readonly struct` | `AbilityTargetDeps` |
 | Slot types | `Slot` suffix | `AbilitySlot` |
 | Enums | PascalCase, no suffix | `StatType`, `StatModifierType`, `DamageType`, `AbilityExecuteResult`, `TryExecuteResult` |
-| Private fields | `_camelCase` with underscore prefix | `_currentHP`, `_handlers` |
-| Public properties | PascalCase | `CurrentHP`, `MaxHP` |
+| Private fields | `_camelCase` with underscore prefix | `_owner`, `_handlers` |
+| Public properties | PascalCase | `CurrentHealth`, `MaxHealth` |
 
 ## Formatting and C# Style
 
@@ -67,11 +67,13 @@ Assets/
 ├── Scripts/
 │   ├── Core/                ← IRandomProvider, StateMachine, IState
 │   │   └── Events/          ← IEvent, IEventBus, EventBus only (no gameplay event structs)
-│   ├── Gameplay/            ← shared gameplay (stats, damageable, combat, buffs, …)
-│   │   ├── Events/          ← HpChangedEvent, HealEvent, DamageEvent, EntityDiedEvent, BuffAppliedEvent, BuffRemovedEvent
+│   ├── Gameplay/            ← shared gameplay (stats, combat, buffs, …)
+│   │   ├── Combat/          ← Damageable, ICombatEntity, DamagePipeline, DamageContext, Modifiers/
+│   │   │   └── Events/      ← HealthChangedEvent, HealEvent, DamageEvent, EntityDiedEvent
+│   │   ├── Events/          ← BuffAppliedEvent, BuffRemovedEvent (when implemented)
 │   │   ├── Stats/           ← StatCollection, Stat, StatModifier, IReadOnlyStatCollection, StatType, StatModifierType
 │   │   │   └── Events/      ← StatChangedEvent
-│   │   └── …                ← Damageable, ICombatEntity, DamagePipeline, BuffSystem, …
+│   │   └── …                ← BuffSystem, …
 │   ├── Ability/             ← AbilitySystem, AbilityTargetDeps, AbilitySlot, ICooldownQuery, IAbilityTargetProvider, DamageAbility, HealAbility, CooldownManager, AbilityConfig
 │   │   └── Events/          ← CooldownStartedEvent, CooldownEndedEvent
 │   └── Demo/                ← DashAbility, UnityRandomProvider, Player, Enemy, GameManager, PlayerInputHandler, EnemyAI, PlayerConfig, EnemyConfig, states, HUD

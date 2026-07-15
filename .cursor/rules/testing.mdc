@@ -15,13 +15,13 @@ Tests must be fast, deterministic, and independent of the Unity scene.
 - For `AbilityConfig` / `BuffConfig`, use `ScriptableObject.CreateInstance<T>()` in Editor tests and assign fields via public test hooks or `[SerializeField]` + reflection — gameplay code must not rely on SO construction outside Unity assets.
 - Use a no-op or manual mock of `IEventBus` in tests that involve `Damageable`, `DamagePipeline`, `StatCollection`, or other event-publishing classes. Do not create a real `EventBus` in tests unless testing `EventBus` itself.
 - When testing damage flow, assert `DamageEvent` is published by `DamagePipeline.Execute` (with a mock bus), not by `Damageable.TakeDamage` alone.
-- When testing HP mutation, assert `HpChangedEvent` is published by `Damageable.TakeDamage` and `Damageable.Heal` (with a mock bus). DoT paths (BurnEffect) rely on this event for UI sync.
+- When testing HP mutation, assert `HealthChangedEvent` is published by `Damageable.TakeDamage` and `Damageable.Heal` (with a mock bus). DoT paths (BurnEffect) rely on this event for UI sync.
 - When testing heal flow, assert `HealEvent` is published by `Damageable.Heal`, not by callers that bypass it.
-- Cover `Damageable.MaxHP` changing live when `StatCollection` is modified (e.g. after applying a `StatModifier` for `MaxHealth`) — regression test for proxy-not-cached design in `type-design.mdc`.
-- Cover **MaxHealth clamp via `StatChangedEvent`**: `AddModifier(MaxHealth)` → `StatChangedEvent` → `Damageable.ClampCurrentHPToMax` (direct or via integration test wiring Stats+Damageable).
-- Cover **non-MaxHealth `StatChangedEvent`**: `AddModifier(AttackPower)` (or other non-MaxHealth stat) → clamp **not** invoked / `ClampCurrentHPToMax` not called.
-- Cover **`Damageable.ClampCurrentHPToMax`**: MaxHealth decreases → CurrentHP clamped + `HpChangedEvent`.
-- Cover `Damageable.Heal`: throws on `amount < 0`; clamps to live `MaxHP`.
+- Cover `Damageable.MaxHealth` changing live when `StatCollection` is modified (e.g. after applying a `StatModifier` for `MaxHealth`) — regression test for proxy-not-cached design in `type-design.mdc`.
+- Cover **MaxHealth clamp via `StatChangedEvent`**: `AddModifier(MaxHealth)` → `StatChangedEvent` → `Damageable.ClampCurrentHealthToMax` (direct or via integration test wiring Stats+Damageable).
+- Cover **non-MaxHealth `StatChangedEvent`**: `AddModifier(AttackPower)` (or other non-MaxHealth stat) → clamp **not** invoked / `ClampCurrentHealthToMax` not called.
+- Cover **`Damageable.ClampCurrentHealthToMax`**: MaxHealth decreases → CurrentHealth clamped + `HealthChangedEvent`.
+- Cover `Damageable.Heal`: throws on `amount < 0`; clamps to live `MaxHealth`.
 - Cover `Stat` dirty-flag cache: after `AddModifier`, `GetRawValue` reflects change; cache invalidates on `RemoveModifier`.
 - Cover `StatCollection` construction / init: null `IEventBus` throws; `SetBaseStat` then `GetValue`; uninitialized `GetValue` / `AddModifier` throws `InvalidOperationException`.
 - Cover `SlowEffect` Independent stacking: two instances on same target, remove one instance's modifier without affecting the other (`StatModifier.Source == BuffInstance`).
@@ -32,8 +32,8 @@ Tests must be fast, deterministic, and independent of the Unity scene.
 - Cover `DamageType.True`: skips DefenseModifier but **still receives CritModifier** when `IsCrit`.
 - Cover pipeline numeric results with Defense + Crit together — **do not** add a test that only asserts modifier registration order is commutative; current pipeline assumes multiplicative modifiers only.
 - Cover mixed Additive + Percent with the documented formula: `(base + Σadditive) × (1 + Σpercent)` — e.g. base=100, +50 Additive, +10% and +20% → **195**.
-- Cover `Damageable.TakeDamage`: throws on `amount < 0`; clamps `CurrentHP` to `>= 0` after large damage.
-- Cover `BuffSystem`: owner injection; `Apply(config, instigator)` sets `BuffInstance.Instigator`; **no** direct `ClampCurrentHPToMax` in BuffSystem (`StatChangedEvent` handles MaxHealth); Apply publishes `BuffAppliedEvent`; remove publishes `BuffRemovedEvent`.
+- Cover `Damageable.TakeDamage`: throws on `amount < 0`; clamps `CurrentHealth` to `>= 0` after large damage.
+- Cover `BuffSystem`: owner injection; `Apply(config, instigator)` sets `BuffInstance.Instigator`; **no** direct `ClampCurrentHealthToMax` in BuffSystem (`StatChangedEvent` handles MaxHealth); Apply publishes `BuffAppliedEvent`; remove publishes `BuffRemovedEvent`.
 - Cover `CooldownManager`: `StartCooldown` publishes `CooldownStartedEvent`; tick to zero publishes `CooldownEndedEvent`; `GetNormalized` returns expected values.
 - Cover `EventBus`: Subscribe/Publish/Unsubscribe routing; **`Publish` does not call `GetInvocationList()`** (implementation invariant — smoke test with multiple subscribers).
 - Cover `StateMachine`: constructor invokes `Enter` on initial state; `ChangeState` Exit→Enter order; same-instance `ChangeState` no-op; `Tick` forwards `deltaTime`; null `initialState`/`newState` throws `ArgumentNullException`.
@@ -43,19 +43,19 @@ Tests must be fast, deterministic, and independent of the Unity scene.
 ```csharp
 // Correct — no scene, no MonoBehaviour
 [Test]
-public void TakeDamage_ReducesCurrentHP()
+public void TakeDamage_ReducesCurrentHealth()
 {
     var eventBus = new NoOpEventBus();
     var stats = new StatCollection(eventBus);
     stats.SetBaseStat(StatType.MaxHealth, 100f);
-    var damageable = new Damageable(stats, eventBus);
-    damageable.TakeDamage(30f);
-    Assert.AreEqual(70f, damageable.CurrentHP);
+    var entity = new TestCombatEntity(stats, eventBus);
+    entity.Damageable.TakeDamage(30f);
+    Assert.AreEqual(70f, entity.Damageable.CurrentHealth);
 }
 
 // Wrong — requires scene, Unity lifecycle
 [UnityTest]
-public IEnumerator TakeDamage_ReducesCurrentHP()
+public IEnumerator TakeDamage_ReducesCurrentHealth()
 {
     yield return null;
 }

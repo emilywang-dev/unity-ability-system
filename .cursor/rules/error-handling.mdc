@@ -25,6 +25,8 @@ public StatCollection(IEventBus eventBus)
 }
 ```
 
+This applies to **`readonly struct` context/deps types** (`DamageContext`, `AbilityContext`, `AbilityTargetDeps`) — they are API boundaries, not passive event payloads. **`Event` structs** (`HealthChangedEvent`, `DamageEvent`, …) may omit null checks when the publisher already holds valid references; optional fields (e.g. buff `instigator`) remain nullable by design.
+
 ## Fail Fast
 
 Prefer failing immediately and loudly during initialization over continuing in a known-bad state. Do not write code that silently no-ops on invalid input when the caller should be told something is wrong.
@@ -70,7 +72,7 @@ public void TakeDamage(float amount)
     {
         throw new ArgumentOutOfRangeException(nameof(amount), amount, "Damage amount must be non-negative.");
     }
-    // subtract, clamp CurrentHP >= 0, publish HpChangedEvent
+    // subtract, clamp CurrentHealth >= 0, publish HealthChangedEvent
 }
 ```
 

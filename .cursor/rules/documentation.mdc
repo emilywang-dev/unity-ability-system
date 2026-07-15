@@ -9,6 +9,10 @@ Default: do **not** generate **member-level** XML doc comments (`/// <summary>`)
 
 Explain **why**, not **what**, for member-level docs and inline comments. Do not restate the next line of code in a comment. (Type-level summaries under Tier 3 below are a narrow, explicitly-scoped exception — see there.)
 
+## XML cross-references
+
+In XML doc comments, name **same-type** members (fields, properties, methods on the documented type) with `<c>Name</c>` — not `<see cref="Name"/>`. Reserve `<see cref="…"/>` for **other types** (or their members) the reader may navigate to. Enum members on the documented enum (e.g. `<c>True</c>` on `DamageType`) follow the same rule.
+
 ## When XML docs are allowed (three tiers)
 
 Judge by **role**, not by a fixed class-name whitelist. Examples below are illustrative.
@@ -21,15 +25,23 @@ Examples: `IEvent`, `IEventBus`, `IState`, `StateMachine`, `IReadOnlyStatCollect
 
 Concrete types that only implement a Tier-1 interface: use `/// <inheritdoc/>` on matching public members instead of duplicating docs.
 
-### Tier 2 — Cross-assembly APIs with non-obvious contracts
+### Tier 2 — Public APIs with non-obvious contracts
 
-Public types/methods consumed across asmdef boundaries whose **preconditions or thrown exceptions are not obvious from the signature** (especially state-dependent `InvalidOperationException`). Document with a short `/// <summary>` plus `<exception>` tags. Add a class-level `<remarks>` only when the type carries cross-cutting invariants (e.g. “must initialize before mutate”).
+**Public** members whose **preconditions, thrown exceptions, value provenance, or intended call path** cannot be inferred from the signature alone. Cross-asmdef consumption is a typical case, not the gate — same-assembly public members (e.g. `Damageable.ClampCurrentHealthToMax`) qualify when the why is non-obvious. Self-explanatory public members (simple getters, obvious mutators) stay Tier 3.
 
-Do **not** require full Tier-1 docs (`<typeparam>` tours, long remarks) here.
+Document with a short `/// <summary>`; add `<exception>` when throws encode usage protocol; add `<remarks>` on the type only for cross-cutting invariants (e.g. shared bus with `StatCollection`). Do **not** require full Tier-1 docs (`<typeparam>` tours, long remarks).
 
-Examples: `StatCollection.AddModifier` / `GetValue` (uninitialized stat → `InvalidOperationException`); `Damageable.TakeDamage` (negative amount → `ArgumentOutOfRangeException`) when that rejection is part of the public contract.
+Non-obvious contract includes:
+- **Usage protocol** — call order or initialization (e.g. `GetValue` before `SetBaseStat` → `InvalidOperationException`).
+- **Domain validation on open types** — reject values the type system still allows (e.g. negative `float` damage/heal).
+- **Value provenance** — who sets a field and when (e.g. `DamageContext.IsCrit` rolled at the ability layer via `IRandomProvider`, not inside the pipeline).
+- **Visibility / call path** — public but not the normal entry point (e.g. clamp normally driven by `StatChangedEvent`).
 
-Usually **omit** documenting every `ArgumentNullException` / obvious range check — the signature and fail-fast guards already communicate those. Prefer documenting exceptions that encode **usage protocol** (call A before B, or else throw).
+**When is a thrown exception part of the public contract?** Document it when the parameter type allows illegal values **and** real or architecturally allowed call paths can pass variable/computed values into this API (e.g. pipeline output, ability math). Omit documentation for constructor null checks on required dependencies and other guards the signature already implies — fail-fast, not usage protocol.
+
+Examples: `StatCollection.AddModifier` / `GetValue`; `Damageable.TakeDamage` / `Heal` (negative amount → `ArgumentOutOfRangeException`); `DamageContext.IsCrit` (provenance); `Damageable.ClampCurrentHealthToMax` (normal path vs public escape hatch).
+
+Usually **omit** documenting every `ArgumentNullException` — prefer exceptions that encode **usage protocol** (call A before B, or else throw).
 
 ### Tier 3 — Everything else
 
@@ -44,13 +56,33 @@ This one line is the **only** place a slight lean toward "what" is acceptable �
 
 `internal` types may skip this line entirely. If an internal type sits at a place a reader might reasonably expect public visibility (e.g. `StatValueValidation`), replace the summary with a one-line reason it's internal instead (e.g. `// Internal validation helpers; not part of the public Stats API surface.`).
 
+## Line length
+
+Wrap `///` XML doc lines and `//` inline comments at **120 characters**. Break at phrase boundaries; continue on the next doc or comment line with the same prefix (`///` or `//`). Prefer shorter lines when a remark is only one or two sentences — do not pad to 120.
+
+## Voice — avoid AI-flavored docs
+
+This section governs **wording**, not structure. Tier 1/2/3 still decide whether a
+`summary` / `remarks` / `<exception>` belongs; Voice only cuts fluff once those tags are justified.
+
+Prefer short, specific contracts over polished essays. Good docs sound like a teammate warning about a footgun, not a generated API brochure.
+
+Signs to cut or rewrite:
+
+- **Defensive framing** — "Not redundant with…", "It is important to note…", "By design…" as padding
+- **Restating the summary in remarks** — if the type summary already says "Shared", don't open remarks with "Construct once and share…"
+- **Stacking every why in one remark** — pick the non-obvious call-path reason; leave implementation trivia to `architecture.mdc`
+- **Step-list summaries** that only narrate the method body — keep side effects that aren't obvious from the signature; drop the rest
+- **Uniform templates** across sibling types ("Published on X by Y after Z") — vary wording; put the real contract in remarks
+- **Marketing / jargon padding** — "diminishing-returns curve", "composition-root contract" when a plain sentence works
+
 ## Inline comments
 
 Add a **one-line** inline comment only where the code deliberately differs from the obvious approach and a fast reader might assume a bug. Multi-fact architecture decisions belong in `architecture.mdc` / local `ARCHITECTURE_Detailed.md`, not pasted into source.
 
 ```csharp
 // Correct — one line, explains the non-obvious part
-// Bypasses DamagePipeline: Buff/Combat are sibling asmdef layers; DoT has no DamageEvent attribution.
+// DoT bypasses DamagePipeline by design — TakeDamage only, no DamageEvent attribution.
 public void OnTick(BuffInstance instance, ICombatEntity target, float deltaTime)
 {
     target.Damageable.TakeDamage(instance.Config.DamagePerSecond * deltaTime);

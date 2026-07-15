@@ -53,7 +53,7 @@ Events are `readonly struct` types **implementing `IEvent`**. `Core/Events/` hol
 | Location | Events |
 |---|---|
 | `Core/Events/` | `IEvent`, `IEventBus`, `EventBus` only |
-| `Gameplay/Events/` | `HpChangedEvent`, `HealEvent`, `DamageEvent`, `EntityDiedEvent`, `BuffAppliedEvent`, `BuffRemovedEvent` |
+| `Gameplay/Combat/Events/` | `HealthChangedEvent`, `HealEvent`, `DamageEvent`, `EntityDiedEvent` (`Gameplay.Combat.Events` namespace) |
 | `Gameplay/Stats/Events/` | `StatChangedEvent` |
 | `Ability/Events/` | `CooldownStartedEvent`, `CooldownEndedEvent` |
 
@@ -98,10 +98,15 @@ Local vs global bus ownership, HUD binding timing, and which events ride which b
 ### Stats / Damageable / Combat
 
 - `ICombatEntity` exposes only `Stats` (`IReadOnlyStatCollection`) and `Damageable` — not `StateMachine`, `EventBus`, or `IBuffApplier`.
-- `Damageable.MaxHealth` (or `MaxHP`) is a read-only property that reads `StatCollection.GetValue(StatType.MaxHealth)` on every access — **never** cache MaxHP as a field on `Damageable`.
-- Prefer mutating MaxHealth via `StatCollection` APIs (`SetBaseStat` / modifier APIs). When the clamped resolved value changes, `StatCollection` publishes `StatChangedEvent`; `Damageable` should clamp CurrentHP on `StatType.MaxHealth` — do not bypass Stats for MaxHealth.
-- `Damageable.TakeDamage` updates HP and publishes **`HpChangedEvent`** on the entity's local bus. It does **not** publish `DamageEvent`. `DamagePipeline.Execute` (when present) publishes `DamageEvent` after applying damage. DoT paths publish only `HpChangedEvent`.
-- `DefenseModifier`: `damage × 100 / (100 + Defense)`; skips `DamageType.True`.
+- `Damageable` ctor: `(ICombatEntity owner, IReadOnlyStatCollection stats, IEventBus eventBus)` — `owner` is the entity published on `HealthChangedEvent` / `HealEvent`; bus must match `StatCollection`'s bus.
+- `Damageable.MaxHealth` is a read-only property that reads `StatCollection.GetValue(StatType.MaxHealth)` on every access — **never** cache MaxHealth as a field on `Damageable`.
+- Prefer mutating MaxHealth via `StatCollection` APIs (`SetBaseStat` / modifier APIs). When the clamped resolved value changes, `StatCollection` publishes `StatChangedEvent`; `Damageable` should call `ClampCurrentHealthToMax()` on `StatType.MaxHealth` — do not bypass Stats for MaxHealth.
+- `Damageable` subscribes to `StatChangedEvent` on the entity's local bus; bus and `Damageable` share the same lifetime (per-entity construction — do not pool/reuse the bus across instances).
+- **`HealthChangedEvent`** is snapshot-only (`CurrentHealth` / `MaxHealth`) — no cause or delta. Use `DamageEvent` / `HealEvent` for amount and attribution. Published only when current health actually changes; MaxHealth-only changes with no clamp do not publish it — HUD max bar should also subscribe to `StatChangedEvent` (`MaxHealth`).
+- `Damageable.TakeDamage` updates health and publishes **`HealthChangedEvent`** on the entity's local bus. It does **not** publish `DamageEvent` or **`EntityDiedEvent`**. `DamagePipeline.Execute` publishes `DamageEvent` (includes **Source** and **Target**) on the **per-call** target bus (from `AbilityTargetDeps`, not ctor-fixed) after `TakeDamage`. DoT paths publish only `HealthChangedEvent`. **`EntityDiedEvent`** payload is **`Entity`** (`ICombatEntity`); published on the **global** bus from `*DeadState.Enter`, not by forwarding `HealthChangedEvent`.
+- `Damageable.Heal` no-ops when dead (revival is out of scope). Event order: mutate health → **`HealthChangedEvent`** → **`HealEvent`** (fact before attribution), same pattern as `TakeDamage` then `DamageEvent`.
+- `DamagePipeline` is a **shared** instance (modifier chain in ctor); `Execute` throws on negative `damage`; short-circuits when `context.Target.Damageable.IsDead` **before** modifiers (TakeDamage's dead guard only skips health mutation).
+- `DefenseModifier`: `damage × DefenseConstant / (DefenseConstant + Defense)` (`DefenseConstant = 100`); skips `DamageType.True`; if `DefenseConstant + Defense <= 0`, returns damage unchanged.
 - `CritModifier`: multiplies by `Source.Stats.GetValue(StatType.CritDamage)` when `ctx.IsCrit` (**True damage still receives crit**). Pipeline allows **multiplicative modifiers only** — no flat/subtractive modifiers without a phased pipeline.
 
 ### Pure C# construction
@@ -118,7 +123,7 @@ Short index only — full rule is above (or in `ARCHITECTURE_Detailed.md` for no
 | `where TOwner : class` / `MonoBehaviour` on StateMachine | StateMachine |
 | `Update` on `IState` / `StateMachine` | StateMachine (`Tick`) |
 | `Initialize()` on pure C# instead of ctor injection | Pure C# construction |
-| Caching `MaxHP` on `Damageable` | Stats / Damageable |
+| Caching `MaxHealth` on `Damageable` | Stats / Damageable |
 | Publishing `DamageEvent` from `Damageable` | Stats / Damageable |
 | Gameplay event structs in `Core/Events/` | Event Placement |
 | Event struct without `IEvent` | Pure C# construction |
