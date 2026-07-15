@@ -3,6 +3,9 @@ using System.Collections.Generic;
 
 namespace Core.Events
 {
+    /// <summary>
+    /// Default <see cref="IEventBus"/> — sync multicast, no GetInvocationList in Publish.
+    /// </summary>
     public sealed class EventBus : IEventBus
     {
         private readonly Dictionary<Type, Delegate> _handlers = new();

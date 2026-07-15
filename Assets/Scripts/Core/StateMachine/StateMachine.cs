@@ -33,12 +33,12 @@ namespace Core.StateMachine
 
         /// <summary>
         /// Exits the current state and enters <paramref name="newState"/>.
-        /// No-op when <paramref name="newState"/> is the same instance as <see cref="CurrentState"/>.
+        /// No-op when <paramref name="newState"/> is the same instance as <c>CurrentState</c>.
         /// </summary>
         /// <param name="newState">The state to activate after exiting the current state.</param>
         /// <exception cref="ArgumentNullException"><paramref name="newState"/> is null.</exception>
         /// <remarks>
-        /// Reentrant <see cref="ChangeState"/> calls from within
+        /// Reentrant <c>ChangeState</c> calls from within
         /// <see cref="IState{TOwner}.Enter"/> or <see cref="IState{TOwner}.Exit"/>
         /// are not supported.
         /// Prefer initiating transitions from <see cref="IState{TOwner}.Tick"/>

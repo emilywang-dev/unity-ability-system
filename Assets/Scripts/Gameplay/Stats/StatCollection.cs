@@ -10,8 +10,7 @@ namespace Gameplay.Stats
     /// when the clamped value changes.
     /// </summary>
     /// <remarks>
-    /// Initialize each <see cref="StatType"/> via <see cref="SetBaseStat"/> 
-    /// before <see cref="GetValue"/> or modifier APIs.
+    /// Initialize each <see cref="StatType"/> via <c>SetBaseStat</c> before <c>GetValue</c> or modifier APIs.
     /// </remarks>
     public sealed class StatCollection : IReadOnlyStatCollection
     {
@@ -69,10 +68,10 @@ namespace Gameplay.Stats
         }
 
         /// <summary>
-        /// Requires prior <see cref="SetBaseStat"/> for <see cref="StatModifier.StatType"/>.
+        /// Requires prior <c>SetBaseStat</c> for <see cref="StatModifier.StatType"/>.
         /// </summary>
         /// <exception cref="InvalidOperationException">
-        /// <see cref="StatModifier.StatType"/> was never passed to <see cref="SetBaseStat"/>.
+        /// <see cref="StatModifier.StatType"/> was never passed to <c>SetBaseStat</c>.
         /// </exception>
         public void AddModifier(StatModifier modifier)
         {
@@ -94,7 +93,7 @@ namespace Gameplay.Stats
 
         /// <summary>
         /// False when the stat or modifier instance is absent — not an error 
-        /// (contrast <see cref="RemoveModifiersFromSource"/>).
+        /// (contrast <c>RemoveModifiersFromSource</c>).
         /// </summary>
         public bool RemoveModifier(StatModifier modifier)
         {
@@ -119,11 +118,8 @@ namespace Gameplay.Stats
         }
 
         /// <summary>
-        /// Removes all modifiers added by the specified source.
+        /// Idempotent teardown helper (e.g. buff/ability remove) — safe if source has no modifiers.
         /// </summary>
-        /// <remarks>
-        /// Designed for idempotent cleanup scenarios such as buff or ability teardown.
-        /// </remarks>
         public void RemoveModifiersFromSource(object source)
         {
             if (source == null)

@@ -12,7 +12,7 @@ namespace Gameplay.Stats
         float GetValue(StatType statType);
 
         /// <summary>
-        /// Same as <see cref="GetValue"/>, but returns false instead of throwing when the stat was never initialized.
+        /// Same as <c>GetValue</c>, but returns false instead of throwing when the stat was never initialized.
         /// </summary>
         bool TryGetValue(StatType statType, out float value);
     }

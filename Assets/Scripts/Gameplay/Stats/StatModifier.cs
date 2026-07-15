@@ -3,7 +3,7 @@ using System;
 namespace Gameplay.Stats
 {
     /// <summary>
-    /// Immutable contribution to one <see cref="StatType"/>, keyed by <see cref="Source"/> for batch removal.
+    /// Immutable contribution to one <see cref="StatType"/>, keyed by <c>Source</c> for batch removal.
     /// </summary>
     public sealed class StatModifier
     {
