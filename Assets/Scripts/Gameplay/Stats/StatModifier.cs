@@ -8,11 +8,8 @@ namespace Gameplay.Stats
     public sealed class StatModifier
     {
         public StatType StatType { get; }
-
         public StatModifierType ModifierType { get; }
-
         public float Value { get; }
-
         /// <summary>
         /// Reference-equality owner for <see cref="StatCollection.RemoveModifiersFromSource"/> —
         /// pass the applying instance (e.g. buff instance), not a shared config, or Independent stacking

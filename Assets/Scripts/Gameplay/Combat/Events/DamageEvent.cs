@@ -1,5 +1,4 @@
 using Core.Events;
-using Gameplay.Combat;
 
 namespace Gameplay.Combat.Events
 {
@@ -23,13 +22,9 @@ namespace Gameplay.Combat.Events
         }
 
         public ICombatEntity Source { get; }
-
         public ICombatEntity Target { get; }
-
         public DamageType DamageType { get; }
-
         public float Amount { get; }
-
         public bool IsCrit { get; }
     }
 }

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using Core.Events;
-using Gameplay.Combat.Modifiers;
 using Gameplay.Combat.Events;
+using Gameplay.Combat.Modifiers;
 
 namespace Gameplay.Combat
 {

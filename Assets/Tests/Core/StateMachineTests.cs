@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using Core.StateMachine;
 using NUnit.Framework;
+using Core.StateMachine;
 
 namespace Tests.Core
 {

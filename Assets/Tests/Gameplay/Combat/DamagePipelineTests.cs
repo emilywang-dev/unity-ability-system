@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
+using NUnit.Framework;
 using Core.Events;
 using Gameplay.Combat;
 using Gameplay.Combat.Events;
 using Gameplay.Combat.Modifiers;
 using Gameplay.Stats;
-using NUnit.Framework;
 
 namespace Tests.Gameplay.Combat
 {

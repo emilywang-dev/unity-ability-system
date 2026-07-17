@@ -1,5 +1,4 @@
 using Core.Events;
-using Gameplay.Combat;
 
 namespace Gameplay.Combat.Events
 {

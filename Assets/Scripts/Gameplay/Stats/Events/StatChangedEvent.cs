@@ -1,5 +1,4 @@
 using Core.Events;
-using Gameplay.Stats;
 
 namespace Gameplay.Stats.Events
 {

@@ -1,7 +1,7 @@
 namespace Gameplay.Combat.Modifiers
 {
     /// <summary>
-    /// Single step in <see cref="DamagePipeline"/>, applied in registration order.
+    /// One step that transforms damage for a hit.
     /// </summary>
     /// <remarks>
     /// Order matters — register modifiers in the intended sequence at composition.

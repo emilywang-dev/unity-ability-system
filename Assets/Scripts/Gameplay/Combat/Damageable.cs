@@ -36,9 +36,7 @@ namespace Gameplay.Combat
         }
 
         public float CurrentHealth { get; private set; }
-
         public float MaxHealth => _stats.GetValue(StatType.MaxHealth);
-
         public bool IsDead => CurrentHealth <= 0f;
 
         /// <summary>

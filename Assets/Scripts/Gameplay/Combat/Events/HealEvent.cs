@@ -1,5 +1,4 @@
 using Core.Events;
-using Gameplay.Combat;
 
 namespace Gameplay.Combat.Events
 {
@@ -19,7 +18,6 @@ namespace Gameplay.Combat.Events
         }
 
         public ICombatEntity Entity { get; }
-
         public float Amount { get; }
     }
 }

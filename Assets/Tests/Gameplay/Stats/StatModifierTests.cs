@@ -1,6 +1,6 @@
 using System;
-using Gameplay.Stats;
 using NUnit.Framework;
+using Gameplay.Stats;
 
 namespace Tests.Gameplay.Stats
 {

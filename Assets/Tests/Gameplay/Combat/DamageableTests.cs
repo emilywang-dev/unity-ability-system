@@ -1,10 +1,8 @@
 using System;
-using Core.Events;
+using NUnit.Framework;
 using Gameplay.Combat;
 using Gameplay.Combat.Events;
 using Gameplay.Stats;
-using Gameplay.Stats.Events;
-using NUnit.Framework;
 
 namespace Tests.Gameplay.Combat
 {

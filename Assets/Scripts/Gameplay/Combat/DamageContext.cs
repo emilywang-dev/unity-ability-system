@@ -1,5 +1,4 @@
 using System;
-using Gameplay.Stats;
 
 namespace Gameplay.Combat
 {
@@ -25,11 +24,8 @@ namespace Gameplay.Combat
         }
 
         public ICombatEntity Source { get; }
-
         public ICombatEntity Target { get; }
-
         public DamageType DamageType { get; }
-
         /// <summary>
         /// Crit flag for the modifier chain. Rolled at the ability layer via
         /// <see cref="Core.IRandomProvider"/> before this context is built.

@@ -1,6 +1,6 @@
 using System;
-using Core.Events;
 using NUnit.Framework;
+using Core.Events;
 
 namespace Tests.Core
 {

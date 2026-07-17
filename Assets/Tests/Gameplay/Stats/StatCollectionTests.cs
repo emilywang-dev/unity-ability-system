@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
+using NUnit.Framework;
 using Core.Events;
 using Gameplay.Stats;
 using Gameplay.Stats.Events;
-using NUnit.Framework;
 
 namespace Tests.Gameplay.Stats
 {

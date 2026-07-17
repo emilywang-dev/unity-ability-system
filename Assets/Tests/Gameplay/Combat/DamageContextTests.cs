@@ -1,7 +1,7 @@
 using System;
+using NUnit.Framework;
 using Gameplay.Combat;
 using Gameplay.Stats;
-using NUnit.Framework;
 
 namespace Tests.Gameplay.Combat
 {
