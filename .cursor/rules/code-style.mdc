@@ -23,7 +23,8 @@ Each class should map to one of the architecture's named responsibilities (see `
 | Context types | `Context` suffix, both `readonly struct` (see `type-design.mdc`) | `DamageContext`, `AbilityContext` |
 | Dependency bundles | `Deps` suffix, `readonly struct` | `AbilityTargetDeps` |
 | Slot types | `Slot` suffix | `AbilitySlot` |
-| Enums | PascalCase, no suffix | `StatType`, `StatModifierType`, `DamageType`, `AbilityExecuteResult`, `TryExecuteResult` |
+| Result types | `Result` suffix, `readonly struct` | `AbilityExecuteResult`, `TryExecuteResult` |
+| Enums | PascalCase, no suffix | `StatType`, `StatModifierType`, `DamageType`, `AbilityFailReason` |
 | Private fields | `_camelCase` with underscore prefix | `_owner`, `_handlers` |
 | Public properties | PascalCase | `CurrentHealth`, `MaxHealth` |
 
@@ -38,7 +39,94 @@ Follow the conventions in `Core/Events/IEvent.cs`, `IEventBus.cs`, and `EventBus
 
 **File layout**
 - `using` directives at the top, blank line, then block-scoped `namespace` matching the layer folder (e.g. `Core.Events`, `Gameplay.Stats`).
-- One blank line between logical sections inside a type or method.
+- Order `using` directives in consecutive groups (no blank lines between groups):
+  1. BCL / `System.*` — alphabetical
+  2. Unity (`UnityEngine`, `UnityEditor`, …) — alphabetical
+  3. Other third-party (e.g. `NUnit.Framework` in tests) — alphabetical; omit when unused
+  4. Project namespaces — **by assembly layer** (dependency direction, bottom → top), then alphabetical within the same layer prefix:
+     `Core` → `Gameplay` → `Ability` → `Demo` → `Tests`
+- Place `using static` directives after project usings (alphabetical).
+- Do not mix groups; when adding usings, match this layout rather than relying on IDE reorder alone.
+
+```csharp
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using Core.Events;
+using Gameplay.Combat;
+using Ability.Buff;
+using Ability.Config;
+```
+
+**Blank lines**
+
+Prefer fewer blank lines. Use a blank line when a **complete control-flow block** ends or the member kind changes — not after every statement.
+
+Same section (no blank line between):
+- Consecutive same-kind members (fields, thin proxy properties, one-line assignments such as `?? throw`)
+- A member and its `//` comment (`//` sits on the line above; that does **not** start a new section)
+- A **single-line** local and the `if` / `return` that immediately consumes it
+  (e.g. `AbilitySlot slot = …;` then `if (slot.Config == null)`, or `Execute(…);` then `if (executeResult.Succeeded)`)
+
+```csharp
+public readonly DamagePipeline DamagePipeline;
+// Only for reading cooldowns. AbilitySystem owns CooldownManager.
+public readonly ICooldownQuery CooldownQuery;
+// Roll crit here. Pipeline just reads DamageContext.IsCrit.
+public readonly IRandomProvider RandomProvider;
+
+public ICombatEntity TargetEntity => Target.Entity;
+public IEventBus TargetEventBus => Target.EventBus;
+public IBuffApplier TargetBuffApplier => Target.BuffApplier;
+
+AbilityConfig config = _configs[abilityIndex];
+IAbility ability = _abilities[abilityIndex];
+
+AbilityExecuteResult executeResult = ability.Execute(in context);
+if (executeResult.Succeeded)
+{
+    ...
+}
+```
+
+New section (one blank line):
+- Field block → property block → constructor / methods
+- After a **multi-line** `if` / `else` / `foreach` / `try` block (`}`), before the next statement — including the assignment or call that the guard protects
+- Between consecutive independent `if` guards (e.g. range check then zero no-op)
+- After an early-return / early-exit block, before the happy-path body or return
+- Between unrelated validation groups when they are not adjacent multi-line `if`s already covered above (e.g. ctor: target checks vs remaining `?? throw` deps)
+
+```csharp
+if (abilityIndex < 0 || abilityIndex >= _abilities.Length)
+{
+    throw new ArgumentOutOfRangeException(nameof(abilityIndex));
+}
+
+AbilityConfig config = _configs[abilityIndex];
+IAbility ability = _abilities[abilityIndex];
+
+if (duration < 0f)
+{
+    throw new ArgumentOutOfRangeException(...);
+}
+
+if (duration == 0f)
+{
+    return;
+}
+
+_stateByIndex[abilityIndex] = new CooldownState { Remaining = duration, Duration = duration };
+
+if (duration <= 0f)
+{
+    return 0f;
+}
+
+return GetRemaining(abilityIndex) / duration;
+```
+
+Do **not** blank-line after every member, between a `//` and the next field in the same group, or between a single-line local and the `if` that immediately inspects it.
+
 - End each file with a single trailing newline.
 
 **Locals and initialization**
@@ -67,15 +155,18 @@ Assets/
 ├── Scripts/
 │   ├── Core/                ← IRandomProvider, StateMachine, IState
 │   │   └── Events/          ← IEvent, IEventBus, EventBus only (no gameplay event structs)
-│   ├── Gameplay/            ← shared gameplay (stats, combat, buffs, …)
+│   ├── Gameplay/            ← shared gameplay (stats, combat, …)
 │   │   ├── Combat/          ← Damageable, ICombatEntity, DamagePipeline, DamageContext, Modifiers/
 │   │   │   └── Events/      ← HealthChangedEvent, HealEvent, DamageEvent, EntityDiedEvent
-│   │   ├── Events/          ← BuffAppliedEvent, BuffRemovedEvent (when implemented)
 │   │   ├── Stats/           ← StatCollection, Stat, StatModifier, IReadOnlyStatCollection, StatType, StatModifierType
 │   │   │   └── Events/      ← StatChangedEvent
-│   │   └── …                ← BuffSystem, …
-│   ├── Ability/             ← AbilitySystem, AbilityTargetDeps, AbilitySlot, ICooldownQuery, IAbilityTargetProvider, DamageAbility, HealAbility, CooldownManager, AbilityConfig
-│   │   └── Events/          ← CooldownStartedEvent, CooldownEndedEvent
+│   ├── Ability/             ← AbilitySystem, AbilityType, AbilityFactory, AbilitySlot, IAbility, AbilityBase, IAbilityTargetProvider
+│   │   ├── Abilities/
+│   │   ├── Buff/            ← IBuffApplier, BuffConfig, BuffSystem (when implemented)
+│   │   ├── Config/
+│   │   ├── Cooldown/        ← CooldownManager, ICooldownQuery (namespace Ability.Cooldown)
+│   │   ├── Events/          ← CooldownStartedEvent, CooldownEndedEvent
+│   │   └── Result/          ← AbilityExecuteResult, TryExecuteResult, AbilityFailReason
 │   └── Demo/                ← DashAbility, UnityRandomProvider, Player, Enemy, GameManager, PlayerInputHandler, EnemyAI, PlayerConfig, EnemyConfig, states, HUD
 ├── Tests/
 ├── Materials/
@@ -85,7 +176,7 @@ Assets/
 
 Do not place types in the wrong layer folder (e.g. a Gameplay type under Core/). Do not recreate `Character/`, `Combat/`, or `Buff/` as top-level Script folders. Do not create speculative empty subfolders.
 
-**Config ScriptableObject placement:** `AbilityConfig` lives in **Ability/**. `BuffConfig` lives in **Gameplay/** (with buff types). `PlayerConfig` and `EnemyConfig` live in **Demo/** — they hold base-stat data used to call `StatCollection.SetBaseStat` at entity init, plus **`List<AbilitySlot>`**, and may serialize Demo-layer `[SerializeReference] IAbility` implementations (e.g. `DashAbility`).
+**Config ScriptableObject placement:** `AbilityConfig` and `BuffConfig` live in **Ability/** (`Config/` and `Buff/`). `PlayerConfig` and `EnemyConfig` live in **Demo/** — they hold base-stat data used to call `StatCollection.SetBaseStat` at entity init, plus **`List<AbilitySlot>`** (`Config` + `AbilityType`). Demo may wrap `AbilityFactory` (e.g. `DemoAbilityFactory`) to create Demo-only skills such as `DashAbility` without reverse dependencies into Ability.
 
 ## Assembly Definitions
 

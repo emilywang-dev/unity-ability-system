@@ -47,7 +47,11 @@ Where a collection's contents change every frame but its capacity is roughly sta
 
 ## Cooldown HUD — Pull, Not Push
 
-Continuous cooldown radial fill is **pulled** by `PlayerHUD.Update` via `ICooldownQuery.GetNormalized(abilityIndex)` — do not publish per-frame cooldown progress events. `CooldownManager` publishes **`CooldownStartedEvent`** and **`CooldownEndedEvent`** only (discrete transitions). This matches industry UI practice and keeps the event bus off hot paths.
+Continuous cooldown radial fill is **pulled** by `PlayerHUD.Update` via
+`AbilitySystem.CooldownQuery.GetNormalized(abilityIndex)` — do not publish per-frame cooldown
+progress events. `CooldownManager` publishes **`CooldownStartedEvent`** and **`CooldownEndedEvent`**
+only (discrete transitions). This matches industry UI practice and keeps the event bus off
+hot paths.
 
 ## AbilityContext Passing
 

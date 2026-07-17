@@ -5,13 +5,45 @@ globs: Assets/Scripts/**/*.cs
 
 # Documentation Rules
 
-Default: do **not** generate **member-level** XML doc comments (`/// <summary>`) unless Tier 1/2 applies, or the user explicitly asks. Prefer names and signatures that are self-explanatory — `IDamageModifier.Modify(float damage, DamageContext ctx)` needs no member comment. Every **public type** still needs the Tier 3 one-line summary (see below).
+Default: do **not** generate **member-level** XML doc comments (`/// <summary>` on fields,
+properties, or methods) unless Tier 1 applies, or the user explicitly asks. Prefer names that
+are self-explanatory. Every **public type** still needs the Tier 3 one-line summary (see below).
 
-Explain **why**, not **what**, for member-level docs and inline comments. Do not restate the next line of code in a comment. (Type-level summaries under Tier 3 below are a narrow, explicitly-scoped exception — see there.)
+Explain **why**, not **what**, for member `//` comments and type remarks. Do not restate the next
+line of code. (Type-level summaries under Tier 3 below are a narrow, explicitly-scoped exception —
+see there.)
+
+## Where docs live (placement)
+
+| Kind of information | Where it goes |
+|---|---|
+| What the **type** is / its boundary | Type `/// <summary>` (Tier 3 floor) |
+| Cross-cutting invariant of the **whole type** | Type `/// <remarks>` |
+| Non-obvious contract of a **specific member** | One-line `//` above that member |
+| Usage-protocol exceptions on a public API | Optional `/// <exception>` on that member (**no** member `/// <summary>`) |
+
+**Do not** put member-specific why in the type `<remarks>`. If the sentence names a member
+(`CooldownQuery`, `IsValid`, `OnHitBuff`), it belongs next to that member as `//`.
+
+Type `<remarks>` stay short and type-scoped, e.g.:
+- who constructs / owns the type
+- what must not hold this type (e.g. not cached on a factory-created `IAbility` flyweight)
+- how the type is meant to be obtained (e.g. self-buff via `ToAbilityTarget`)
+
+```csharp
+// Correct — member footgun next to the member
+// Read-only surface; mutable cooldown state stays on CooldownManager in AbilitySystem.
+public readonly ICooldownQuery CooldownQuery;
+```
+
+Rule of thumb: **类型说边界，成员说脚枪；句子里出现成员名，就写在成员上的 `//`。**
 
 ## XML cross-references
 
-In XML doc comments, name **same-type** members (fields, properties, methods on the documented type) with `<c>Name</c>` — not `<see cref="Name"/>`. Reserve `<see cref="…"/>` for **other types** (or their members) the reader may navigate to. Enum members on the documented enum (e.g. `<c>True</c>` on `DamageType`) follow the same rule.
+In XML doc comments, name **same-type** members (fields, properties, methods on the documented type)
+with `<c>Name</c>` — not `<see cref="Name"/>`. Reserve `<see cref="…"/>` for **other types** (or
+their members) the reader may navigate to. Enum members on the documented enum (e.g. `<c>True</c>`
+on `DamageType`) follow the same rule.
 
 ## When XML docs are allowed (three tiers)
 
@@ -19,66 +51,109 @@ Judge by **role**, not by a fixed class-name whitelist. Examples below are illus
 
 ### Tier 1 — Project-wide contracts
 
-Cross-cutting APIs that define how layers talk to each other (typically Core, but not limited to the Core folder). Full XML is appropriate: `/// <summary>`, `<typeparam>`, `<exception>`, `<remarks>` as needed.
+Cross-cutting APIs that define how layers talk to each other (typically Core, but not limited to
+the Core folder). Full XML is appropriate: `/// <summary>`, `<typeparam>`, `<exception>`,
+`<remarks>` as needed.
 
 Examples: `IEvent`, `IEventBus`, `IState`, `StateMachine`, `IReadOnlyStatCollection`.
 
-Concrete types that only implement a Tier-1 interface: use `/// <inheritdoc/>` on matching public members instead of duplicating docs.
+Concrete types that only implement a Tier-1 interface: use `/// <inheritdoc/>` on matching public
+members instead of duplicating docs.
 
-### Tier 2 — Public APIs with non-obvious contracts
+### Tier 2 — Non-obvious member contracts
 
-**Public** members whose **preconditions, thrown exceptions, value provenance, or intended call path** cannot be inferred from the signature alone. Cross-asmdef consumption is a typical case, not the gate — same-assembly public members (e.g. `Damageable.ClampCurrentHealthToMax`) qualify when the why is non-obvious. Self-explanatory public members (simple getters, obvious mutators) stay Tier 3.
+When a **member** has a non-obvious precondition, provenance, or call path:
 
-Document with a short `/// <summary>`; add `<exception>` when throws encode usage protocol; add `<remarks>` on the type only for cross-cutting invariants (e.g. shared bus with `StatCollection`). Do **not** require full Tier-1 docs (`<typeparam>` tours, long remarks).
+1. Put a one-line `//` above that member (**preferred**), or
+2. Only if the same fact applies to several members / the type as a whole, put it in type
+   `<remarks>` (see Placement).
+
+Never use `/// <summary>` on fields, properties, or methods for Tier 2. Optional:
+`/// <exception>` on a public method/ctor **without** a member summary when the throw encodes
+usage protocol and tools benefit from it.
+
+Cross-asmdef consumption is a typical case, not the gate — same-assembly public members (e.g.
+`Damageable.ClampCurrentHealthToMax`) qualify when the why is non-obvious. Self-explanatory
+public members stay undocumented.
 
 Non-obvious contract includes:
-- **Usage protocol** — call order or initialization (e.g. `GetValue` before `SetBaseStat` → `InvalidOperationException`).
-- **Domain validation on open types** — reject values the type system still allows (e.g. negative `float` damage/heal).
-- **Value provenance** — who sets a field and when (e.g. `DamageContext.IsCrit` rolled at the ability layer via `IRandomProvider`, not inside the pipeline).
-- **Visibility / call path** — public but not the normal entry point (e.g. clamp normally driven by `StatChangedEvent`).
+- **Usage protocol** — call order or initialization (e.g. `GetValue` before `SetBaseStat` →
+  `InvalidOperationException`).
+- **Domain validation on open types** — reject values the type system still allows (e.g. negative
+  `float` damage/heal).
+- **Value provenance** — who sets a field and when (e.g. crit rolled at the ability layer via
+  `IRandomProvider`, not inside the pipeline).
+- **Visibility / call path** — public but not the normal entry point (e.g. clamp normally driven
+  by `StatChangedEvent`).
 
-**When is a thrown exception part of the public contract?** Document it when the parameter type allows illegal values **and** real or architecturally allowed call paths can pass variable/computed values into this API (e.g. pipeline output, ability math). Omit documentation for constructor null checks on required dependencies and other guards the signature already implies — fail-fast, not usage protocol.
+**When is a thrown exception part of the public contract?** Document it (member `//`, or
+`<exception>` without member summary) when the parameter type allows illegal values **and** real
+or architecturally allowed call paths can pass variable/computed values into this API. Omit
+documentation for constructor null checks on required dependencies — fail-fast, not usage protocol.
 
-Examples: `StatCollection.AddModifier` / `GetValue`; `Damageable.TakeDamage` / `Heal` (negative amount → `ArgumentOutOfRangeException`); `DamageContext.IsCrit` (provenance); `Damageable.ClampCurrentHealthToMax` (normal path vs public escape hatch).
+Examples: `StatCollection.AddModifier` / `GetValue`; `Damageable.TakeDamage` / `Heal`;
+`DamageContext.IsCrit` (field `//` for provenance); `Damageable.ClampCurrentHealthToMax`.
 
-Usually **omit** documenting every `ArgumentNullException` — prefer exceptions that encode **usage protocol** (call A before B, or else throw).
+Usually **omit** documenting every `ArgumentNullException` — prefer exceptions that encode
+**usage protocol** (call A before B, or else throw).
 
 ### Tier 3 — Everything else
 
 Members: no XML. Self-explanatory public members and internal helpers stay uncommented.
 
-Types: every **public** class/interface/struct/enum still gets at least one `/// <summary>` line, even when none of its members qualify for Tier 1/2 and would otherwise get zero documentation. This is a portfolio/reviewer-legibility floor, not a contract-documentation tier — it exists so opening `StatType.cs` or `StatModifierType.cs` cold gives an immediate sense of the type's role, without implying its members carry any usage protocol worth documenting. Tier 3 is a **floor**, not a ceiling: if the type later carries cross-cutting invariants, add `<remarks>` under Tier 2 rules.
+Types: every **public** class/interface/struct/enum still gets at least one `/// <summary>` line,
+even when none of its members qualify for Tier 1/2 and would otherwise get zero documentation.
+This is a portfolio/reviewer-legibility floor, not a contract-documentation tier — it exists so
+opening `StatType.cs` or `StatModifierType.cs` cold gives an immediate sense of the type's role,
+without implying its members carry any usage protocol worth documenting. Tier 3 is a **floor**,
+not a ceiling: if the type later carries cross-cutting invariants, add `<remarks>` under
+Placement rules (type-scoped only).
 
-This one line is the **only** place a slight lean toward "what" is acceptable — naming the type's role or boundary (e.g. "Additive or Percent contribution applied to a Stat's raw value" for `StatModifierType`) is fine, since a type has no "next line of code" to restate. It must not:
+This one line is the **only** place a slight lean toward "what" is acceptable — naming the type's
+role or boundary (e.g. "Additive or Percent contribution applied to a Stat's raw value" for
+`StatModifierType`) is fine, since a type has no "next line of code" to restate. It must not:
 - restate the type name (`StatType` → ~~"Represents a stat type"~~)
 - turn into a members list or usage tutorial
-- migrate down onto members — a member with no Tier 1/2 justification still gets nothing, regardless of how well-documented its parent type is
+- list member-specific contracts (those go on members as `//`)
 
-`internal` types may skip this line entirely. If an internal type sits at a place a reader might reasonably expect public visibility (e.g. `StatValueValidation`), replace the summary with a one-line reason it's internal instead (e.g. `// Internal validation helpers; not part of the public Stats API surface.`).
+`internal` types may skip this line entirely. If an internal type sits at a place a reader might
+reasonably expect public visibility (e.g. `StatValueValidation`), replace the summary with a
+one-line reason it's internal instead (e.g. `// Internal validation helpers; not part of the
+public Stats API surface.`).
 
 ## Line length
 
-Wrap `///` XML doc lines and `//` inline comments at **120 characters**. Break at phrase boundaries; continue on the next doc or comment line with the same prefix (`///` or `//`). Prefer shorter lines when a remark is only one or two sentences — do not pad to 120.
+Wrap `///` XML doc lines and `//` inline comments at **120 characters**. Break at phrase
+boundaries; continue on the next doc or comment line with the same prefix (`///` or `//`).
+Prefer shorter lines when a remark is only one or two sentences — do not pad to 120.
 
 ## Voice — avoid AI-flavored docs
 
-This section governs **wording**, not structure. Tier 1/2/3 still decide whether a
-`summary` / `remarks` / `<exception>` belongs; Voice only cuts fluff once those tags are justified.
+This section governs **wording**, not structure. Placement / Tier 1/2/3 still decide whether a
+type `summary` / `remarks`, member `//`, or optional `<exception>` belongs; Voice only cuts fluff
+once those are justified.
 
-Prefer short, specific contracts over polished essays. Good docs sound like a teammate warning about a footgun, not a generated API brochure.
+Prefer short, specific contracts over polished essays. Good docs sound like a teammate warning
+about a footgun, not a generated API brochure.
 
 Signs to cut or rewrite:
 
 - **Defensive framing** — "Not redundant with…", "It is important to note…", "By design…" as padding
-- **Restating the summary in remarks** — if the type summary already says "Shared", don't open remarks with "Construct once and share…"
-- **Stacking every why in one remark** — pick the non-obvious call-path reason; leave implementation trivia to `architecture.mdc`
-- **Step-list summaries** that only narrate the method body — keep side effects that aren't obvious from the signature; drop the rest
-- **Uniform templates** across sibling types ("Published on X by Y after Z") — vary wording; put the real contract in remarks
-- **Marketing / jargon padding** — "diminishing-returns curve", "composition-root contract" when a plain sentence works
+- **Restating the summary in remarks** — if the type summary already says "Shared", don't open
+  remarks with "Construct once and share…"
+- **Member laundry lists in type remarks** — if the sentence names a member, move it to `//`
+- **Stacking every why in one remark** — type remarks stay type-scoped; leave implementation
+  trivia to `architecture.mdc`
+- **Step-list summaries** that only narrate the method body
+- **Uniform templates** across sibling types
+- **Marketing / jargon padding** — "diminishing-returns curve", "composition-root contract" when
+  a plain sentence works
 
 ## Inline comments
 
-Add a **one-line** inline comment only where the code deliberately differs from the obvious approach and a fast reader might assume a bug. Multi-fact architecture decisions belong in `architecture.mdc` / local `ARCHITECTURE_Detailed.md`, not pasted into source.
+Prefer **`//`** for member-local footguns. One line, why-not-what. See Placement. Multi-fact
+architecture that is not tied to one member belongs in type `<remarks>`, `architecture.mdc`, or
+local `ARCHITECTURE_Detailed.md` — not multi-line essays above a method.
 
 ```csharp
 // Correct — one line, explains the non-obvious part
@@ -89,4 +164,5 @@ public void OnTick(BuffInstance instance, ICombatEntity target, float deltaTime)
 }
 ```
 
-Wrong: multi-sentence “architecture essays” above a method, or comments that only narrate what the code already says.
+Wrong: multi-sentence “architecture essays” above a method, or comments that only narrate what
+the code already says.

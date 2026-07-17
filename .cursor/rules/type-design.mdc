@@ -13,7 +13,7 @@ Event types should be immutable. Prefer `readonly struct`; a `class` is allowed 
 |---|---|
 | (bus only: `IEvent`, `IEventBus`, `EventBus`) | `Core/Events/` |
 | `HealthChangedEvent`, `HealEvent`, `DamageEvent`, `EntityDiedEvent` | `Gameplay/Combat/Events/` (`Gameplay.Combat.Events` namespace) |
-| `BuffAppliedEvent`, `BuffRemovedEvent` | `Gameplay/Events/` (when implemented) |
+| `BuffAppliedEvent`, `BuffRemovedEvent` | `Ability/Buff/Events/` (when implemented) |
 | `StatChangedEvent` | `Gameplay/Stats/Events/` |
 | `CooldownStartedEvent`, `CooldownEndedEvent` | `Ability/Events/` |
 
@@ -54,22 +54,22 @@ public readonly struct DamageContext
 }
 ```
 
-`AbilityContext` is a `readonly struct`, initialized through its constructor. Do not add fields to it after construction. It holds `Target` (`AbilityTargetDeps` bundle) so target Entity/EventBus/BuffApplier stay cohesive. It holds `ICooldownQuery` (not `CooldownManager`) for read-only cooldown checks. It holds `Random` (`IRandomProvider`) for crit rolls — never use `UnityEngine.Random` in abilities. It also holds `AbilityIndex` and `Config` — per-entity execution dependencies injected by `AbilitySystem`, not stored on `[SerializeReference] IAbility` assets.
+`AbilityContext` is a `readonly struct`, initialized through its constructor. Do not add fields to it after construction. It holds `Target` (`AbilityTargetDeps` bundle) so target Entity/EventBus/BuffApplier stay cohesive — rejects `!target.IsValid` with `ArgumentException` (guards `default(AbilityTargetDeps)`). It holds `ICooldownQuery` (not `CooldownManager`) for read-only cooldown checks. It holds `RandomProvider` (`IRandomProvider`) for crit rolls — never use `UnityEngine.Random` in abilities. It also holds `AbilityIndex` and `Config` — per-entity execution dependencies injected by `AbilitySystem`, not stored on factory-created `IAbility` flyweights. Cooldown gating for `TryExecute` is owned by `AbilitySystem` (`IsOnCooldown` → `OnCooldown`); `IAbility.CanExecute` is a separate non-cooldown gate (`false` → `Fail(Blocked)`).
 
 **All `IAbility` / `AbilityBase` methods take `in AbilityContext ctx`** to avoid defensive struct copies on a non-hot but multi-field struct.
 
-`AbilityTargetDeps` is a `readonly struct` bundling the target's execution dependencies: `Entity` (`ICombatEntity`), `EventBus` (target's local bus), and `BuffApplier` (`IBuffApplier`). `IAbilityTargetProvider.ToAbilityTarget()` on `Player`/`Enemy` builds it. `AbilitySystem.TryExecute` takes `AbilityTargetDeps` instead of separate target/bus/applier parameters. Self-target abilities pass the caster's own `ToAbilityTarget()`.
+`AbilityTargetDeps` is a `readonly struct` bundling the target's execution dependencies: `Entity` (`ICombatEntity`), `EventBus` (target's local bus), and `BuffApplier` (`IBuffApplier`). Constructor fail-fasts per field; `IsValid` is the single composite invariant (used by `AbilityContext`). `IAbilityTargetProvider.ToAbilityTarget()` on `Player`/`Enemy` builds it. `AbilitySystem.TryExecute` takes `AbilityTargetDeps` instead of separate target/bus/applier parameters. Self-target abilities pass the caster's own `ToAbilityTarget()`.
 
 ```csharp
 public readonly struct AbilityContext
 {
     public readonly ICombatEntity Caster;
     public readonly AbilityTargetDeps Target;
-    public readonly DamagePipeline DamagePipeline;
-    public readonly ICooldownQuery CooldownQuery;
     public readonly int AbilityIndex;
     public readonly AbilityConfig Config;
-    public readonly IRandomProvider Random;
+    public readonly DamagePipeline DamagePipeline;
+    public readonly ICooldownQuery CooldownQuery;
+    public readonly IRandomProvider RandomProvider;
 
     public ICombatEntity TargetEntity => Target.Entity;
     public IEventBus TargetEventBus => Target.EventBus;
@@ -78,11 +78,11 @@ public readonly struct AbilityContext
     public AbilityContext(
         ICombatEntity caster,
         AbilityTargetDeps target,
-        DamagePipeline damagePipeline,
-        ICooldownQuery cooldownQuery,
         int abilityIndex,
         AbilityConfig config,
-        IRandomProvider random) { ... }
+        DamagePipeline damagePipeline,
+        ICooldownQuery cooldownQuery,
+        IRandomProvider randomProvider) { ... }
 }
 
 // Wrong — do not expose mutable CooldownManager to abilities
@@ -97,7 +97,23 @@ public readonly struct AbilityContext
 public struct AbilitySlot
 {
     public AbilityConfig Config;
-    [SerializeReference] public IAbility Implementation;
+    public AbilityType AbilityType;
+}
+```
+
+```csharp
+public interface IAbilityFactory
+{
+    IAbility Create(AbilityType abilityType);
+    Type GetExpectedConfigType(AbilityType abilityType);
+}
+
+public sealed class AbilityFactory : IAbilityFactory
+{
+    // Single dictionary of Registration { Creator, ExpectedConfigType }; Register in ctor / Demo (no overwrite).
+    public IAbility Create(AbilityType abilityType) { ... }
+    public Type GetExpectedConfigType(AbilityType abilityType) { ... }
+    public void Register(AbilityType abilityType, Func<IAbility> creator, Type expectedConfigType) { ... } // duplicate → InvalidOperationException
 }
 ```
 
@@ -107,6 +123,8 @@ public readonly struct AbilityTargetDeps
     public readonly ICombatEntity Entity;
     public readonly IEventBus EventBus;
     public readonly IBuffApplier BuffApplier;
+
+    public bool IsValid => Entity != null && EventBus != null && BuffApplier != null;
 
     public AbilityTargetDeps(ICombatEntity entity, IEventBus eventBus, IBuffApplier buffApplier) { ... }
 }
@@ -139,16 +157,22 @@ public sealed class StatModifier
 
 ## Serialization Attributes
 
-`[SerializeField]`, `[SerializeReference]`, and `[CreateAssetMenu]` belong only to `MonoBehaviour` and `ScriptableObject` subclasses. Do not add serialization attributes to pure C# classes.
+`[SerializeField]`, `[SerializeReference]`, and `[CreateAssetMenu]` belong on `MonoBehaviour` and
+`ScriptableObject` subclasses. Do **not** add them to ordinary pure C# gameplay services
+(`StatCollection`, `Damageable`, `CooldownManager`, …).
+
+**Allowed exceptions** (Unity nesting requirements):
+- `[Serializable]` on `AbilitySlot` (and similar slot/bundle structs embedded in SO configs)
+- `[Serializable]` / `[SerializeReference]` on future `IBuffEffect` fields hosted by `BuffConfig` (when Buff lands)
 
 ```csharp
-// Wrong
+// Wrong — pure gameplay service
 public class StatCollection
 {
-    [SerializeField] private float _baseAttack; // pure class — no serialization
+    [SerializeField] private float _baseAttack;
 }
 
-// Correct
+// Correct — SO owns serialized data; AbilitySlot stores Config + AbilityType (factory resolves IAbility)
 public class PlayerConfig : ScriptableObject
 {
     [SerializeField] private StatBaseEntry[] _statBases;
@@ -158,20 +182,28 @@ public class PlayerConfig : ScriptableObject
 
 ## ScriptableObjects
 
-Every `ScriptableObject` subclass must have a `[CreateAssetMenu]` attribute. Do not generate a ScriptableObject without it.
+Every **concrete, designer-creatable** `ScriptableObject` subclass must have a `[CreateAssetMenu]` attribute. Do not generate a creatable ScriptableObject without it.
+
+**Exception:** abstract bases (e.g. `AbilityConfig`) must **not** have `[CreateAssetMenu]` — only concrete subclasses (e.g. `DamageAbilityConfig`, `BuffConfig`, Demo `PlayerConfig` / `EnemyConfig`).
 
 ```csharp
-[CreateAssetMenu(menuName = "AbilitySystem/AbilityConfig", fileName = "AbilityConfig")]
-public class AbilityConfig : ScriptableObject
+// Abstract base — no CreateAssetMenu
+public abstract class AbilityConfig : ScriptableObject
 {
     [SerializeField] private float _cooldownDuration;
-    [SerializeField] private BuffConfig _onCastBuff;
+    [SerializeField] private BuffConfig _onHitBuff;
 
     public float CooldownDuration => _cooldownDuration;
-    public BuffConfig OnCastBuff => _onCastBuff;
+    public BuffConfig OnHitBuff => _onHitBuff;
 }
 
-[CreateAssetMenu(menuName = "AbilitySystem/PlayerConfig", fileName = "PlayerConfig")]
+[CreateAssetMenu(menuName = "Ability/Config/DamageAbilityConfig", fileName = "DamageAbilityConfig")]
+public class DamageAbilityConfig : AbilityConfig { ... }
+
+[CreateAssetMenu(menuName = "Ability/Config/BuffConfig", fileName = "BuffConfig")]
+public class BuffConfig : ScriptableObject { ... }
+
+[CreateAssetMenu(menuName = "Ability/Config/PlayerConfig", fileName = "PlayerConfig")]
 public class PlayerConfig : ScriptableObject
 {
     [SerializeField] private StatBaseEntry[] _statBases;
@@ -184,11 +216,18 @@ public class PlayerConfig : ScriptableObject
 
 ScriptableObjects in this project are configuration assets only (`AbilityConfig`, `BuffConfig`, `PlayerConfig`, `EnemyConfig`). Do not store mutable runtime state inside a ScriptableObject field — a ScriptableObject asset is shared across all instances that reference it, so writing runtime state to it (e.g. current cooldown remaining, current buff stacks) corrupts state for every entity sharing that asset. Runtime state belongs in pure C# classes owned per-entity (`CooldownManager`, `BuffSystem`, `BuffInstance`).
 
-Do not use a ScriptableObject as a service locator, event channel, or singleton accessor in this project. `[SerializeReference] IAbility` instances on `AbilitySlot` are shared ability *implementations* — they must not cache or mutate per-entity runtime state (no `CooldownManager` in the constructor). Per-entity execution dependencies (`ICooldownQuery`, slot `Config`, `AbilityIndex`, `Random`) are passed through `AbilityContext` by `AbilitySystem`. Cooldown *state* lives in `CooldownManager`, not on the `IAbility` asset.
+Do not use a ScriptableObject as a service locator, event channel, or singleton accessor in this project. Factory-created `IAbility` flyweights must not cache or mutate per-entity runtime state (no `CooldownManager` in the constructor). Per-entity execution dependencies (`ICooldownQuery`, slot `Config`, `AbilityIndex`, `Random`) are passed through `AbilityContext` by `AbilitySystem`. Cooldown *state* lives in `CooldownManager`, not on the `IAbility` instance.
 
-`[SerializeReference] IBuffEffect` on `BuffConfig` follows the same rule: shared flyweight implementations must not hold per-entity runtime state. Stacks, duration, and instance-specific data live on `BuffInstance` only.
+`[SerializeReference] IBuffEffect` on `BuffConfig` (when Buff lands) follows the same rule: shared flyweight implementations must not hold per-entity runtime state. Stacks, duration, and instance-specific data live on `BuffInstance` only.
 
-`AbilityConfig.OnCastBuff` is an optional `BuffConfig` reference (assign a `BuffConfig` asset in the Inspector). Buff applies when `Execute` returns `Success`, not after a separate hit-confirm gate (including when pipeline damage is 0). Hit-type abilities (e.g. `DamageAbility`) call **`ApplyOnCastBuff(in ctx)`**; `AbilitySystem` must not apply it.
+`AbilityConfig.OnHitBuff` is an optional `BuffConfig` applied to the ability **Target**
+(instigator = caster) after a **successful living-target hit path** — including when pipeline
+damage is **0**. It is **not** applied when `DamageAbility` rejects a **dead** target
+(`CanExecute` false / `Execute` `Fail(Blocked)` → no CD, no buff). Applied **after**
+`DamagePipeline.Execute`, so it does not affect this hit's damage (post-hit DoT/debuff
+semantics). Hit-type abilities call **`ApplyOnHitBuff(in ctx)`** via
+`ctx.TargetBuffApplier.Apply(config, ctx.Caster)`; `AbilitySystem` must not apply it.
+Self-buff skills pass the caster as target via `ToAbilityTarget()`.
 
 ## StatCollection Formula
 

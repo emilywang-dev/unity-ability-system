@@ -58,7 +58,18 @@ public void Apply(BuffConfig config, ICombatEntity instigator = null)
 }
 ```
 
-Cooldown is the third case: `IAbility.CanExecute` returning `false` because `ctx.CooldownQuery.IsOnCooldown(ctx.AbilityIndex)` is true is not an error; `AbilitySystem.TryExecute` returns `TryExecuteResult.OnCooldown` without calling `Execute`.
+Cooldown is the third case: `AbilitySystem` checks `CooldownManager.IsOnCooldown` and returns
+`TryExecuteResult.OnCooldown` without calling `Execute`. `IAbility.CanExecute` is a separate
+non-cooldown gate; when it returns `false`, `TryExecute` returns
+`TryExecuteResult.Fail(AbilityFailReason.Blocked)`.
+
+`AbilitySystem` construction fail-fasts when any slot lacks `Config`, has
+`AbilityType.None`, or Config type mismatches `IAbilityFactory.GetExpectedConfigType`
+(`InvalidOperationException`), and when `IAbilityFactory` is null
+(`ArgumentNullException`). `TryExecute` validates `abilityIndex`, null `caster`, and
+`!target.IsValid` **before** the cooldown gate — bad args always throw, including while on
+cooldown. Dead-target rejection for instant hit abilities is gameplay state via `Blocked`
+(not an exception).
 
 ## Numeric and Protocol Validation
 
@@ -78,7 +89,9 @@ public void TakeDamage(float amount)
 
 `Heal` should reject negative amounts similarly (`ArgumentOutOfRangeException`). Zero damage/heal is valid and should no-op or apply without throwing.
 
-`AbilitySystem.TryExecute` must throw `ArgumentOutOfRangeException` when `abilityIndex` is out of range — do not return a reserved `TryExecuteResult` value for caller bugs.
+`AbilitySystem.TryExecute` must throw `ArgumentOutOfRangeException` when `abilityIndex` is out of range,
+`ArgumentNullException` when `caster` is null, and `ArgumentException` when `target` is invalid —
+do not return a reserved `TryExecuteResult` value for caller bugs.
 
 **Stats (`StatCollection`)** — init is explicit, not a constructor dictionary dump:
 

@@ -7,15 +7,15 @@ globs: Assets/Scripts/**/*.cs
 
 **Scope of this file:** only constraints that protect **code that already exists** (or is being edited in-tree) from Cursor drift. One rule is stated once — do not re-expand it in Common Mistakes.
 
-**Forward design** (GameManager injection order, entity tick chain, AbilitySystem / BuffSystem / HUD wiring, TryExecute flow, on-cast buff site, etc.) lives in local gitignored `ARCHITECTURE_Detailed.md`. Follow Detailed when implementing a new module; after the module lands and is verified, promote only the pitfalls Cursor actually hits into this file.
+**Forward design** (GameManager injection order, entity tick chain, AbilitySystem / BuffSystem / HUD wiring, TryExecute flow, on-hit buff site, etc.) lives in local gitignored `ARCHITECTURE_Detailed.md`. Follow Detailed when implementing a new module; after the module lands and is verified, promote only the pitfalls Cursor actually hits into this file.
 
 ## Layer Boundaries
 
 See `.asmdef` files for the authoritative dependency graph.
 
 - `Core` — no dependencies on other game layers (event bus + state machine only; **no** gameplay event structs).
-- `Gameplay` — depends only on `Core` (stats, damageable, combat, buffs, gameplay events).
-- `Ability` — depends on `Core` and `Gameplay`.
+- `Gameplay` — depends only on `Core` (stats, damageable, combat, gameplay events).
+- `Ability` — depends on `Core` and `Gameplay` (abilities, cooldowns, buffs).
 - `Demo` — depends on Core, Gameplay, and Ability.
 
 Direction: **Core ← Gameplay ← Ability ← Demo**. Do not introduce reverse references. If unsure which layer a type belongs to, check the asmdef files.
@@ -30,7 +30,7 @@ This is a **portfolio-scale single-player demo** (~3k–5k LOC, fixed ability sl
 
 | System | Reason |
 |---|---|
-| `GameplayTag` / tag containers / BlockedByTags / CancelsTags | Demo uses `CanExecute` + cooldown only |
+| `GameplayTag` / tag containers / BlockedByTags / CancelsTags | Demo: System owns cooldown; `CanExecute` is non-cooldown gates only |
 | `TargetFilter` / `TargetPolicy` / AOE / cone / ground targeting | Single-target 1v1; `TryExecute` takes one `AbilityTargetDeps` |
 | `GameplayEffectSpec` / attribute snapshotting at cast time | Modifiers read live `Stats` at hit time |
 | Resource / cost gating (mana, energy, charges) | Cooldown only |
@@ -42,7 +42,7 @@ This is a **portfolio-scale single-player demo** (~3k–5k LOC, fixed ability sl
 | Modifier priority phases (Base → Equipment → Buff → Final) | **Multiplicative modifiers only** |
 | AbilityId registry replacing fixed `AbilityIndex` | Three fixed slots |
 | SO Event Channels as global event backbone | Injected `IEventBus` instances |
-| Merging `AbilityExecuteResult` and `TryExecuteResult` | Two enums by design — `OnCooldown` only on `TryExecuteResult` |
+| Putting `OnCooldown` on `IAbility.Execute` result | `TryExecuteResult.IsOnCooldown` only; execute failures share `AbilityFailReason` via `AbilityExecuteResult` / `TryExecuteResult` structs |
 
 If asked to "make it more like GAS," extend README **GAS Comparison / What I'd Do Differently** — do not silently expand runtime scope.
 
@@ -109,6 +109,18 @@ Local vs global bus ownership, HUD binding timing, and which events ride which b
 - `DefenseModifier`: `damage × DefenseConstant / (DefenseConstant + Defense)` (`DefenseConstant = 100`); skips `DamageType.True`; if `DefenseConstant + Defense <= 0`, returns damage unchanged.
 - `CritModifier`: multiplies by `Source.Stats.GetValue(StatType.CritDamage)` when `ctx.IsCrit` (**True damage still receives crit**). Pipeline allows **multiplicative modifiers only** — no flat/subtractive modifiers without a phased pipeline.
 
+### AbilitySystem / DamageAbility
+
+- `AbilitySystem` ctor requires `IAbilityFactory`, copies Config + creates flyweights per slot, and fail-fasts if any slot `Config` is null, `AbilityType` is `None`, or Config type mismatches `IAbilityFactory.GetExpectedConfigType`.
+- Slot wiring is **`AbilityType` + factory**, not `[SerializeReference] IAbility`. `AbilityFactory` uses a registration dictionary (not switch); `Register` rejects duplicates. Demo may `Register` new types or wrap for Demo-only skills (e.g. Dash).
+- `TryExecute` order: validate `abilityIndex` → null `caster` / `!target.IsValid` → `IsOnCooldown` → build `AbilityContext` → `CanExecute` → `Execute` → **only on `Succeeded`** call `StartCooldown`. Bad args throw even while on cooldown (validation is before the CD gate).
+- Cooldown rejection is **`TryExecuteResult.OnCooldown()` only** — never put `OnCooldown` on `AbilityExecuteResult` / `AbilityFailReason`. `!CanExecute` → `Fail(Blocked)` without calling `Execute`.
+- `IAbility.CanExecute` is a **non-cooldown** gate (default `true` on `AbilityBase`). Do not check `CooldownQuery.IsOnCooldown` inside `CanExecute`.
+- Read-only cooldown surface is **`CooldownQuery`** (`ICooldownQuery`) on both `AbilitySystem` and `AbilityContext`. Do not expose mutable `CooldownManager` to abilities or HUD.
+- On-hit buff: abilities call `ApplyOnHitBuff` / `TargetBuffApplier.Apply` after their hit path; **`AbilitySystem` must not Apply**. Config field is **`OnHitBuff`** (not `OnCastBuff`).
+- `DamageAbility`: target `IsDead` → `CanExecute` false / `Execute` `Fail(Blocked)` — **no cooldown, no OnHitBuff**. Pipeline short-circuit on dead is separate; ability must not treat dead as Success. Living target with final damage `0` may still Apply OnHitBuff after pipeline.
+- `DamageAbility` requires `DamageAbilityConfig`; wrong config type → `InvalidOperationException` at **AbilitySystem ctor** (primary) and again in `Execute` (defense in depth).
+
 ### Pure C# construction
 
 - Pure C# classes take dependencies through the **constructor**. Do not add `Initialize(Dependency)` methods except where Unity constructs the object (`MonoBehaviour` / `ScriptableObject`) and a constructor is unavailable.
@@ -129,4 +141,7 @@ Short index only — full rule is above (or in `ARCHITECTURE_Detailed.md` for no
 | Event struct without `IEvent` | Pure C# construction |
 | `FindObjectOfType` / service locator / static shared services | Dependency Injection |
 | `UnityEngine.Random` in pure C# gameplay | Dependency Injection |
+| `!CanExecute` → `OnCooldown` / CD check inside `CanExecute` | AbilitySystem / DamageAbility |
+| `OnCastBuff` / `ApplyOnCastBuff` / System Applies buff | AbilitySystem / DamageAbility (`OnHitBuff`) |
+| Dead target Success + StartCooldown / OnHitBuff | AbilitySystem / DamageAbility |
 | HUD / Ability / Buff / GameManager composition mistakes | `ARCHITECTURE_Detailed.md` |
