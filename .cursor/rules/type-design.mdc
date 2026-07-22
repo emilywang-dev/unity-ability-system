@@ -203,14 +203,22 @@ public class DamageAbilityConfig : AbilityConfig { ... }
 [CreateAssetMenu(menuName = "Ability/Config/BuffConfig", fileName = "BuffConfig")]
 public class BuffConfig : ScriptableObject { ... }
 
-[CreateAssetMenu(menuName = "Ability/Config/PlayerConfig", fileName = "PlayerConfig")]
+// Demo entity configs live under Demo/ — not Ability/Config/
+[CreateAssetMenu(menuName = "Demo/Config/PlayerConfig", fileName = "PlayerConfig")]
 public class PlayerConfig : ScriptableObject
 {
     [SerializeField] private StatBaseEntry[] _statBases;
     [SerializeField] private List<AbilitySlot> _abilitySlots;
 
-    public IReadOnlyDictionary<StatType, float> GetBaseStats() { ... }
     public IReadOnlyList<AbilitySlot> AbilitySlots => _abilitySlots;
+    public void ApplyBaseStats(StatCollection stats) { ... }  // SetBaseStat per entry
+}
+
+[CreateAssetMenu(menuName = "Demo/Config/EnemyConfig", fileName = "EnemyConfig")]
+public class EnemyConfig : ScriptableObject
+{
+    [SerializeField] private StatBaseEntry[] _statBases;
+    public void ApplyBaseStats(StatCollection stats) { ... }
 }
 ```
 

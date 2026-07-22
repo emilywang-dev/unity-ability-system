@@ -167,7 +167,7 @@ Assets/
 │   │   ├── Cooldown/        ← CooldownManager, ICooldownQuery (namespace Ability.Cooldown)
 │   │   ├── Events/          ← CooldownStartedEvent, CooldownEndedEvent
 │   │   └── Result/          ← AbilityExecuteResult, TryExecuteResult, AbilityFailReason
-│   └── Demo/                ← DashAbility, UnityRandomProvider, Player, Enemy, GameManager, PlayerInputHandler, EnemyAI, PlayerConfig, EnemyConfig, states, HUD
+│   └── Demo/                ← GameManager, Player, Enemy, PlayerInputHandler, NoOpBuffApplier, UnityRandomProvider, PlayerConfig, EnemyConfig, StatBaseEntry, DashAbility, EnemyAI, states, PlayerHUD / EnemyHUD
 ├── Tests/
 ├── Materials/
 └── Scenes/
@@ -176,7 +176,7 @@ Assets/
 
 Do not place types in the wrong layer folder (e.g. a Gameplay type under Core/). Do not recreate `Character/`, `Combat/`, or `Buff/` as top-level Script folders. Do not create speculative empty subfolders.
 
-**Config ScriptableObject placement:** `AbilityConfig` and `BuffConfig` live in **Ability/** (`Config/` and `Buff/`). `PlayerConfig` and `EnemyConfig` live in **Demo/** — they hold base-stat data used to call `StatCollection.SetBaseStat` at entity init, plus **`List<AbilitySlot>`** (`Config` + `AbilityType`). Demo may wrap `AbilityFactory` (e.g. `DemoAbilityFactory`) to create Demo-only skills such as `DashAbility` without reverse dependencies into Ability.
+**Config ScriptableObject placement:** `AbilityConfig` and `BuffConfig` live in **Ability/** (`Config/` and `Buff/`). `PlayerConfig` and `EnemyConfig` live in **Demo/** — they apply base stats via `ApplyBaseStats(StatCollection)` at entity init, plus Player **`List<AbilitySlot>`** (`Config` + `AbilityType`). Demo may wrap `AbilityFactory` (e.g. `DemoAbilityFactory`) to create Demo-only skills such as `DashAbility` without reverse dependencies into Ability.
 
 ## Assembly Definitions
 

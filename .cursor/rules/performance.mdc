@@ -43,11 +43,11 @@ Where a collection's contents change every frame but its capacity is roughly sta
 
 ## State Instance Reuse
 
-`IState<TOwner>` implementations may be allocated once per entity during initialization (`ConstructGameplaySystems`) and reused across transitions. `ChangeState(cachedInstance)` is correct. Do not `new` state objects inside `IState.Tick` or other per-frame hot paths — that conflicts with the allocation rules above. Stateless flyweight state objects are preferred.
+`IState<TOwner>` implementations may be allocated once per entity during initialization (`Player`/`Enemy.Initialize`) and reused across transitions. `ChangeState(cachedInstance)` is correct. Do not `new` state objects inside `IState.Tick` or other per-frame hot paths — that conflicts with the allocation rules above. Stateless flyweight state objects are preferred.
 
 ## Cooldown HUD — Pull, Not Push
 
-Continuous cooldown radial fill is **pulled** by `PlayerHUD.Update` via
+Continuous cooldown radial fill is **pulled** by `PlayerHUD` via
 `AbilitySystem.CooldownQuery.GetNormalized(abilityIndex)` — do not publish per-frame cooldown
 progress events. `CooldownManager` publishes **`CooldownStartedEvent`** and **`CooldownEndedEvent`**
 only (discrete transitions). This matches industry UI practice and keeps the event bus off
