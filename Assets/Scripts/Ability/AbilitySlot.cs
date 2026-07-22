@@ -9,7 +9,7 @@ namespace Ability
     [Serializable]
     public struct AbilitySlot
     {
-        public AbilityConfig Config;
         public AbilityType AbilityType;
+        public AbilityConfig Config;
     }
 }
